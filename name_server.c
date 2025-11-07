@@ -9,6 +9,7 @@
 
 #include "protocol.h"
 #include "utils.h"
+#include "nm_database.h"
 
 void *handle_connection(void *socket_desc){
     // 1. Getting the socket_fd from the argument
@@ -38,10 +39,11 @@ void *handle_connection(void *socket_desc){
                 sprintf(log_msg, "Client connected: %s", username);
                 log_event(LOG_LEVEL_INFO, log_msg);
 
+                // Adding user to the master list of users
+                db_add_user(username);
+
                 // Sending SUCCESS reply
                 write(client_socket, MSG_SUCCESS, strlen(MSG_SUCCESS));
-
-                // TODO: Store client information
             }
             else{
                 log_event(LOG_LEVEL_ERROR, "Malformed REG_CLIENT request.");
@@ -53,9 +55,8 @@ void *handle_connection(void *socket_desc){
 
         // If the sender is a storage server
         else if(strncmp(buffer, CMD_REG_SS, strlen(CMD_REG_SS)) == 0){
-            buffer[strcspn(buffer, "\n")] = 0;    // Removing trailing newline
-            sprintf(log_msg, "Storage server connected. Data: %s", buffer);
-            log_event(LOG_LEVEL_INFO, log_msg);
+            // Adds the SS info to the SS list and re-links its files
+            db_register_ss(buffer);
 
             // Sending SUCCESS reply
             write(client_socket, MSG_SUCCESS, strlen(MSG_SUCCESS));
@@ -86,6 +87,8 @@ int main(){
 
     // 0. Initialise our utilities
     utils_init("name_server.log");
+    db_init();
+    db_load_from_disk();    // This populates the hashmap
 
     // 1. Creating the server socket
     //printf("Creating server socket...\n");

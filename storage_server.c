@@ -112,7 +112,7 @@ int main(int argc, char *argv[]){
     /*// TODO: I guess I have to scan some directory to get this list
     const char *file_list = "file1.txt file2.txt project_doc.txt";*/
 
-    int n = sprintf(buffer, "%s %s %d %d %s\n", CMD_REG_SS, MY_IP, my_nm_port, my_client_port, file_list_buffer);
+    int n = sprintf(buffer, "%s %s %d %d %s", CMD_REG_SS, MY_IP, my_nm_port, my_client_port, file_list_buffer);
 
     sprintf(log_msg, "Sending registration: %s", buffer);
     log_event(LOG_LEVEL_DEBUG, log_msg); // DEBUG level, as it's verbose

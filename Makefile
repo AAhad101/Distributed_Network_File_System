@@ -1,60 +1,56 @@
 # Makefile for LangOS Project
 
+# --- Compiler and Flags ---
 CC = gcc
-# Added -D_REENTRANT for some systems, good practice for threads
-CFLAGS = -g -Wall -pthread -D_REENTRANT
-LDFLAGS = -pthread
+# -g = Add debug symbols
+# -Wall = Turn on all warnings
+# -pthread = Link the POSIX threads library
+CFLAGS = -g -Wall -pthread
+LDFLAGS = -pthread # Linker flags
+
+# --- Executables ---
+EXECUTABLES = name_server storage_server client
 
 # --- Source Files ---
-# utils.c is now its own category
-UTIL_SRCS = utils.c
-NM_SRCS = name_server.c
-SS_SRCS = storage_server.c
+# Define the source files for each program
+NM_SRCS = name_server.c utils.c nm_database.c
+SS_SRCS = storage_server.c utils.c
 C_SRCS = client.c
 
 # --- Object Files ---
-# All .c files become .o files
-UTIL_OBJS = $(UTIL_SRCS:.c=.o)
+# Automatically create .o filenames from .c filenames
 NM_OBJS = $(NM_SRCS:.c=.o)
 SS_OBJS = $(SS_SRCS:.c=.o)
 C_OBJS = $(C_SRCS:.c=.o)
 
-# --- Executable Names ---
-NM_EXEC = name_server
-SS_EXEC = storage_server
-C_EXEC = client
+# --- Main Target (Default) ---
+# This is what runs when you just type "make"
+all: $(EXECUTABLES)
 
-# --- Main Targets ---
-all: $(NM_EXEC) $(SS_EXEC) $(C_EXEC)
+# --- Linking Rules ---
+# Rule to build the 'name_server' executable
+name_server: $(NM_OBJS)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	@echo "Linked $@ successfully."
 
-# Rule to build the Name Server
-# *** MODIFIED: Now depends on utils.o ***
-$(NM_EXEC): $(NM_OBJS) $(UTIL_OBJS)
-	$(CC) $(CFLAGS) -o $(NM_EXEC) $(NM_OBJS) $(UTIL_OBJS) $(LDFLAGS)
+# Rule to build the 'storage_server' executable
+storage_server: $(SS_OBJS)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	@echo "Linked $@ successfully."
 
-# Rule to build the Storage Server
-# *** MODIFIED: Now depends on utils.o ***
-$(SS_EXEC): $(SS_OBJS) $(UTIL_OBJS)
-	$(CC) $(CFLAGS) -o $(SS_EXEC) $(SS_OBJS) $(UTIL_OBJS) $(LDFLAGS)
+# Rule to build the 'client' executable
+client: $(C_OBJS)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	@echo "Linked $@ successfully."
 
-# Rule to build the Client (no utils needed yet)
-$(C_EXEC): $(C_OBJS)
-	$(CC) $(CFLAGS) -o $(C_EXEC) $(C_OBJS)
+# --- Generic Compilation Rule ---
+# A generic rule to build any .o file from its .c file
+# This runs automatically for each dependency
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
-# --- Generic Rules ---
-# These rules build the .o files
-$(NM_OBJS): $(NM_SRCS)
-	$(CC) $(CFLAGS) -c $(NM_SRCS)
-
-$(SS_OBJS): $(SS_SRCS)
-	$(CC) $(CFLAGS) -c $(SS_SRCS)
-
-$(C_OBJS): $(C_SRCS)
-	$(CC) $(CFLAGS) -c $(C_SRCS)
-
-$(UTIL_OBJS): $(UTIL_SRCS)
-	$(CC) $(CFLAGS) -c $(UTIL_SRCS)
-
-# --- Cleanup ---
+# --- Cleanup Rule ---
+# This runs when you type "make clean"
 clean:
-	rm -f *.o $(NM_EXEC) $(SS_EXEC) $(C_EXEC) *.log
+	rm -f *.o $(EXECUTABLES) *.log
+	@echo "Cleanup complete."

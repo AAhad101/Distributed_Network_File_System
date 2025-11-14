@@ -10,6 +10,8 @@
 #define MAX_SS_COUNT 100
 #define NM_METADATA_FILE "nm_metadata.dat"
 
+extern pthread_mutex_t db_mutex;
+
 // Data structures
 
 // Represents a single user in an access list
@@ -78,6 +80,34 @@ void db_add_user(const char *username);
 
 // Parses the registration string, stores the SS info and re-links its files
 void db_register_ss(const char *reg_string);
+
+// Finds all the users and makes a newline-terminated string by concatenating them
+char* db_get_all_users();
+
+// Checks if a user has a certain permission for a file
+int db_check_permission(FileMetadata *metadata, const char *username, char permission);
+
+/*
+ * Gets a string of all the files based on user and flags
+ * show_details is 1 if -l is present and 0 otherwise
+ * show_all is 1 if -a is present and 0 otherwise
+*/
+char *db_get_file_list(const char *username, int show_all, int show_details);
+
+// Returns the file given a filename
+FileNode *db_find_node_internal(const char *filename);
+
+/*
+ * Atomically finds a file, checks read permission and updates access time
+ * Returns 0 on success or an error code like 404 or 401 on failure
+*/
+//int db_get_and_update_info(const char *filename, const char *username, FileMetadata *meta_out);
+
+// 
+void db_add_permission(const char *filename, const char *username, char type);
+
+//
+void db_remove_permission(const char *filename, const char *username);
 
 #endif
 

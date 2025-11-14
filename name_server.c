@@ -10,6 +10,7 @@
 #include "protocol.h"
 #include "utils.h"
 #include "nm_database.h"
+#include "user_func.h"
 
 void *handle_connection(void *socket_desc){
     // 1. Getting the socket_fd from the argument
@@ -18,6 +19,8 @@ void *handle_connection(void *socket_desc){
 
     char buffer[MAX_BUFFER];
     char log_msg[MAX_BUFFER + 200];
+    char username[100] = {0};
+    int is_client = 0;
 
     // 2. Reading the handshake message from the sender
     int bytes_read = read(client_socket, buffer, MAX_BUFFER - 1);
@@ -33,7 +36,6 @@ void *handle_connection(void *socket_desc){
 
         // If the sender is a client
         if(strncmp(buffer, CMD_REG_CLIENT, strlen(CMD_REG_CLIENT)) == 0){
-            char username[100];
             // Parsing the username
             if(sscanf(buffer, CMD_REG_CLIENT " %s", username) == 1){
                 sprintf(log_msg, "Client connected: %s", username);
@@ -44,6 +46,7 @@ void *handle_connection(void *socket_desc){
 
                 // Sending SUCCESS reply
                 write(client_socket, MSG_SUCCESS, strlen(MSG_SUCCESS));
+                is_client = 1;
             }
             else{
                 log_event(LOG_LEVEL_ERROR, "Malformed REG_CLIENT request.");
@@ -60,9 +63,7 @@ void *handle_connection(void *socket_desc){
 
             // Sending SUCCESS reply
             write(client_socket, MSG_SUCCESS, strlen(MSG_SUCCESS));
-
-            // TODO: Parse and store storage server details
-            // Question: What data is even gettin printed here? Shouldn't the SS have some name also?
+            is_client = 0;
         }
         
         // Invalid sender (or wrong handshake)
@@ -75,8 +76,64 @@ void *handle_connection(void *socket_desc){
         }
     }
 
-    // 4. Ending the connection
-    close(client_socket);       // TODO: Apparently this should become a loop later on
+    // 4. Command loop for client
+    if(is_client){
+        while(1){
+            memset(buffer, 0, MAX_BUFFER);  // Clearing the buffer
+            bytes_read = read(client_socket, buffer, MAX_BUFFER - 1);
+
+            if(bytes_read <= 0){
+                sprintf(log_msg, "Client '%s' disconnected.", username);
+                log_event(LOG_LEVEL_INFO, log_msg);
+                break;
+            }
+
+            buffer[bytes_read] = '\0';          // Null-terminate the command
+            buffer[strcspn(buffer, "\n")] = 0;  // Strip newline
+
+            if(strlen(buffer) == 0){
+                continue;   // Ignore empty commands
+            }
+
+            // Duplicate buffer for parsing
+            char parse_buffer[MAX_BUFFER];
+            strncpy(parse_buffer, buffer, MAX_BUFFER);
+
+            // Separate the command from the arguments
+            char *command = strtok(parse_buffer, " ");  // Gets the command
+            char *args = strtok(NULL, "");              // Gets the rest of the string (args)
+            if(args == NULL){
+                args = "";      // This is to ensure that args isn't NULL
+            }
+
+            sprintf(log_msg, "User '%s' | Command: '%s' | Arguments: '%s'", username, command, args);
+            log_event(LOG_LEVEL_DEBUG, log_msg);
+
+            if(strcmp(command, "LIST") == 0){
+                handle_list_command(client_socket, username, args);
+            }
+            else if(strcmp(command, "INFO") == 0){
+                handle_info_command(client_socket, username, args);
+            }
+            else{
+                // TODO: Similar stuff for all user functions
+
+                sprintf(log_msg, "Unknown command '%s' from '%s'", command, username);
+                log_event(LOG_LEVEL_WARN, log_msg);
+                write(client_socket, MSG_UNKNOWN, strlen(MSG_UNKNOWN));
+            }
+        }
+    }
+
+    // 5. Ending the connection (cleanup)
+    if(strlen(username) > 0){
+        sprintf(log_msg, "Closing connection for %s", username);
+    } 
+    else{
+        sprintf(log_msg, "Closing connection for Storage Server");
+    }
+    log_event(LOG_LEVEL_DEBUG, log_msg);
+    close(client_socket);
     pthread_exit(NULL);
 }
 

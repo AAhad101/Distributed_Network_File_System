@@ -12,8 +12,8 @@ LDFLAGS = -pthread # Linker flags
 EXECUTABLES = name_server storage_server client
 
 # --- Source Files ---
-# Define the source files for each program
-NM_SRCS = name_server.c utils.c nm_database.c
+# 'name_server' now depends on user_func.c
+NM_SRCS = name_server.c utils.c nm_database.c user_func.c
 SS_SRCS = storage_server.c utils.c
 C_SRCS = client.c
 
@@ -29,6 +29,7 @@ all: $(EXECUTABLES)
 
 # --- Linking Rules ---
 # Rule to build the 'name_server' executable
+# $^ means "all prerequisites" (all the .o files)
 name_server: $(NM_OBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	@echo "Linked $@ successfully."
@@ -45,12 +46,12 @@ client: $(C_OBJS)
 
 # --- Generic Compilation Rule ---
 # A generic rule to build any .o file from its .c file
-# This runs automatically for each dependency
+# $< means "the first prerequisite" (the .c file)
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # --- Cleanup Rule ---
 # This runs when you type "make clean"
 clean:
-	rm -f *.o $(EXECUTABLES) *.log
+	rm -f *.o $(EXECUTABLES) *.log nm_metadata.dat
 	@echo "Cleanup complete."

@@ -8,7 +8,7 @@
 static FileNode *hash_table[HASH_TABLE_SIZE];       // Main hash table for files
 static StorageServerInfo ss_list[MAX_SS_COUNT];     // List of connected storage servers
 static UserNode *user_list_head = NULL;             // Master list of all registered users
-static pthread_mutex_t db_mutex;                    // Mutex to protect all database operations
+pthread_mutex_t db_mutex;                           // Mutex to protect all database operations
 
 // The hash function for the filename string
 // djb2 string hash function
@@ -33,7 +33,7 @@ static void db_insert_node(FileNode *new_node){
 // Function to find file in the hash table
 // Average time complexity - O(1)
 // Worst case time complexity - O(k) [k = No. of files]
-static FileNode *db_find_node_internal(const char *filename){
+FileNode *db_find_node_internal(const char *filename){
     unsigned long hash_index = db_hash(filename) % HASH_TABLE_SIZE;
     FileNode *current = hash_table[hash_index];
     while(current != NULL){
@@ -150,6 +150,8 @@ void db_load_from_disk(){
                     else if(strcmp(type, "W") == 0){
                         user_node->next = file_node->metadata.write_permissions_head;
                         file_node->metadata.write_permissions_head = user_node;
+                        
+
                     }
                 }
             }
@@ -213,6 +215,58 @@ void db_save_to_disk(){
     pthread_mutex_unlock(&db_mutex);
     log_event(LOG_LEVEL_DEBUG, "Metadata save complete.");
 }
+
+/*
+ * Non-locking save function (called in db_get_and_update_info())
+ * The caller locks and unlocks accordingly
+ * Same as db_save_to_disk other than the locking part
+*/
+
+/*static void db_save_to_disk_locked(){
+    FILE *file = fopen(NM_METADATA_FILE, "w");
+    if(file == NULL){
+        log_event(LOG_LEVEL_ERROR, "Could not open metadata file for writing.");
+        return;
+    }
+
+    // Traversing through the hash table to visit every file node
+    for(int i = 0; i < HASH_TABLE_SIZE; i++){
+        FileNode *current_file = hash_table[i];
+
+        while(current_file != NULL){
+            // 1. Write the main file entry with new field
+            fprintf(file, "FILE|%s|%lu|%lu|%lu|%ld|%ld|%ld|%s\n",
+                current_file->filename,
+                current_file->metadata.size,
+                current_file->metadata.word_count,
+                current_file->metadata.char_count,
+                current_file->metadata.time_created,
+                current_file->metadata.time_last_modified,
+                current_file->metadata.time_last_accessed,
+                current_file->metadata.user_last_accessed
+            );
+
+            // 2. Write all READ permissions
+            UserAccessNode *current_user = current_file->metadata.read_permissions_head;
+            while(current_user){
+                fprintf(file, "PERM|%s|R|%s\n", current_file->filename, current_user->username);
+                current_user = current_user->next;
+            }
+
+            // 3. Write all WRITE permissions
+            current_user = current_file->metadata.write_permissions_head;
+            while(current_user){
+                fprintf(file, "PERM|%s|W|%s\n", current_file->filename, current_user->username);
+                current_user = current_user->next;
+            }
+
+            current_file = current_file->next;
+        }
+    }
+
+    fclose(file);
+    log_event(LOG_LEVEL_DEBUG, "Metadata save complete.");
+}*/
 
 // Function to add a new user to the master list of users
 void db_add_user(const char *username){
@@ -325,3 +379,197 @@ void db_register_ss(const char *reg_string){
 
     pthread_mutex_unlock(&db_mutex);
 }
+
+
+char *db_get_all_users(){
+    pthread_mutex_lock(&db_mutex);
+
+    // Allocating space for the string
+    int buffer_size = MAX_BUFFER;   // Start with a reasonable size
+    char *user_string = (char *)malloc(sizeof(char) * buffer_size);
+    if(user_string == NULL){
+        log_event(LOG_LEVEL_ERROR, "malloc failed in db_get_all_users");
+        pthread_mutex_unlock(&db_mutex);
+        return NULL;
+    }
+
+    user_string[0] = '\0';  // Starting with an empty string
+
+    UserNode *current = user_list_head;
+    while(current){
+        // First check if the buffer has enough space (with newline and null character)
+        if(strlen(user_string) + strlen(current->username) + 2 > buffer_size){
+            // Not enough size, so we realloc to double the buffer size
+            buffer_size *= 2;
+            char *new_buffer = (char *)realloc(user_string, buffer_size);
+            if(new_buffer == NULL){
+                log_event(LOG_LEVEL_ERROR, "realloc failed in db_get_all_users");
+                free(user_string);
+                pthread_mutex_unlock(&db_mutex);
+                return NULL;
+            }
+            user_string = new_buffer;
+        }
+
+        // Appending the username and a newline to the string
+        strcat(user_string, current->username);
+        strcat(user_string, "\n");
+
+        current = current->next;
+    }
+
+    pthread_mutex_unlock(&db_mutex);
+    return user_string;
+}
+
+static int is_user_in_list(UserAccessNode *head, const char *username){
+    UserAccessNode *current = head;
+    while(current){
+        if(strcmp(current->username, username) == 0){
+            return 1;
+        }
+        current = current->next;
+    }
+    return 0;
+}
+
+int db_check_permission(FileMetadata *metadata, const char *username, char permission){
+    // 1. The owner always has both read and write permissions
+    if(strcmp(metadata->owner, username) == 0){
+        return 1;
+    }
+
+    // 2. Checking for read permission
+    if(permission == 'R'){
+        if(is_user_in_list(metadata->read_permissions_head, username)){
+            return 1;
+        }
+        if(is_user_in_list(metadata->write_permissions_head, username)){
+            return 1;
+        }
+    }
+
+    // 3. Checking for write permission
+    if(permission == 'W'){
+        if(is_user_in_list(metadata->write_permissions_head, username)){
+            return 1;
+        }
+    }
+
+// --- The "transactional" function is REMOVED ---
+    return 0;   // No permission found
+}
+
+// Gets a formatted string of files based on VIEW command flags
+char *db_get_file_list(const char *username, int show_all, int show_details){
+    // Start with a large buffer
+    size_t buffer_size = MAX_BUFFER * 2;
+    char *file_list_str = (char *)malloc(sizeof(char) * buffer_size);
+    if(file_list_str == NULL){
+        log_event(LOG_LEVEL_ERROR, "malloc failed in db_get_file_list");
+        return NULL;
+    }
+
+    file_list_str[0] = '\0';
+
+    char line_buffer[1024];
+    char time_str[30];
+
+    pthread_mutex_lock(&db_mutex);
+
+    if(show_all){
+        snprintf(line_buffer, sizeof(line_buffer), "|  Filename  | Words | Chars | Last Access Time | Owner |\n");
+    }
+
+    // Iterate over every bucket (index) in the hash table
+    for(int i = 0; i < HASH_TABLE_SIZE; i++){
+        FileNode *current_file = hash_table[i];
+
+        // Iterate over every file in the bucket's linked list
+        while(current_file){
+            int has_read = db_check_permission(&(current_file->metadata), username, 'R');
+        
+            // If the user has read access or the -a flag is present
+            if(has_read || show_all){
+                if(strlen(file_list_str) + 1024 > buffer_size){
+                    buffer_size *= 2;
+                    char *new_buffer = (char *)realloc(file_list_str, buffer_size);
+                    if(new_buffer == NULL){
+                        log_event(LOG_LEVEL_ERROR, "realloc failed in db_get_file_list");
+                        free(file_list_str);
+                        pthread_mutex_unlock(&db_mutex);
+                        return NULL;
+                    }
+                    file_list_str = new_buffer;
+                }
+
+                // Format the output string
+                if(show_details){
+                    // Formatting time string
+                    ctime_r(&(current_file->metadata.time_last_accessed), time_str);
+                    time_str[strcspn(time_str, "\n")] = '\0';
+
+                    // -l flag is present so we have to print all the details
+                    snprintf(line_buffer, sizeof(line_buffer),
+                            "%-20s | WC: %-8lu | CC: %-8lu | Last Access: %-26s | Owner: %s\n",
+                            current_file->filename,
+                            current_file->metadata.word_count,
+                            current_file->metadata.char_count,
+                            current_file->metadata.time_last_accessed,
+                            current_file->metadata.owner
+                    );
+                }
+                else{
+                    // No flags or just -a flag is present
+                    snprintf(line_buffer, sizeof(line_buffer), "%s\n", current_file->filename);
+                }
+
+                // Concatenating with current file_list_str
+                strcat(file_list_str, line_buffer);
+            }
+
+            current_file = current_file->next;
+        }
+    }
+
+    pthread_mutex_unlock(&db_mutex);
+    return file_list_str;
+}
+
+// Atomic function to find file, check permissions, and update access time
+/*int db_get_and_update_info(const char *filename, const char *username, FileMetadata *meta_out){
+    int error_code = 0;
+
+    // 1. Lock the database 
+    pthread_mutex_lock(&db_mutex);
+
+    // 2. Find the file
+    FileNode *node = db_find_node_internal(filename);
+    if(node == NULL){
+        error_code = 404;   // File not found
+        pthread_mutex_unlock(&db_mutex);
+        return error_code;
+    }
+
+    // 3. Check permission
+    if(!db_check_permission(&(node->metadata), username, 'R')){
+        error_code = 401;   // Unauthorised
+        pthread_mutex_unlock(&db_mutex);
+        return error_code;
+    }
+
+    // 4. Update the metadata
+    node->metadata.time_last_accessed = time(NULL);
+    strncpy(node->metadata.user_last_accessed, username, sizeof(node->metadata.user_last_accessed) - 1);
+
+    // 5. Save the changes to the disk to ensure persistence
+    db_save_to_disk_locked();  // This function assumes the caller locks
+
+    // 6. Copy the data to the output struct for the user
+    memcpy(meta_out, &(node->metadata), sizeof(FileMetadata));
+
+    // 7. Unlock the database before returning
+    pthread_mutex_unlock(&db_mutex);
+
+    return 0;
+}*/

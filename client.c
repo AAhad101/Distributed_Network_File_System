@@ -67,8 +67,33 @@ int main(int argc, char *argv[]){
         if(strncmp(buffer, "200", 3) == 0){
             printf("Registration successful.\n");
 
+            // 5. Client command loop
             while(1){
-                sleep(10);
+                printf("> ");
+
+                memset(buffer, 0, MAX_BUFFER);
+                if(fgets(buffer, MAX_BUFFER - 1, stdin) == NULL){
+                    printf("\nDisconnecting...\n");
+                    break;
+                }
+
+                if(write(sock, buffer, strlen(buffer)) < 0){
+                    perror("write to server failed");
+                    break;
+                }
+
+                memset(buffer, 0, MAX_BUFFER);
+                bytes_read = read(sock, buffer, MAX_BUFFER - 1);
+
+                if(bytes_read <= 0){
+                    printf("Server disconnected.\n");
+                    break;
+                }
+
+                buffer[bytes_read] = '\0';
+
+                // Print the server's reply (output of the command)
+                printf("%s", buffer);
             }
         } 
         else{
@@ -79,11 +104,9 @@ int main(int argc, char *argv[]){
         printf("Failed to get reply from server.\n");
     }
 
-    // 5. Close connection
+    // 6. Close connection
     close(sock);
     
-    // TODO: Client should not exit here rather it should loop to input user commands
-
     printf("Client shutting down.\n");
 
     return 0;

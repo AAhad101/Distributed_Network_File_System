@@ -1,0 +1,71 @@
+[Fri Nov 14 18:04:57 2025] [INFO] Database initialised
+[Fri Nov 14 18:04:57 2025] [INFO] Loading metadata from disk...
+[Fri Nov 14 18:04:57 2025] [WARN] Metadata file not found. Starting fresh.
+[Fri Nov 14 18:04:57 2025] [INFO] Name Server started. Waiting for connections...
+[Fri Nov 14 18:05:16 2025] [INFO] Database initialised
+[Fri Nov 14 18:05:16 2025] [INFO] Loading metadata from disk...
+[Fri Nov 14 18:05:16 2025] [INFO] Metadata load complete.
+[Fri Nov 14 18:05:16 2025] [INFO] Name Server started. Waiting for connections...
+[Fri Nov 14 18:05:34 2025] [INFO] New connection accepted from 127.0.0.1:56740
+[Fri Nov 14 18:05:34 2025] [INFO] Client connected: bob
+[Fri Nov 14 18:05:34 2025] [DEBUG] Added new user to master list: bob
+[Fri Nov 14 18:05:40 2025] [DEBUG] User 'bob' | Command: 'VIEW' | Arguments: ''
+[Fri Nov 14 18:05:40 2025] [INFO] User 'bob' requested VIEW with args ''
+[Fri Nov 14 18:06:48 2025] [DEBUG] User 'bob' | Command: 'VIEW' | Arguments: '-l'
+[Fri Nov 14 18:06:48 2025] [INFO] User 'bob' requested VIEW with args '-l'
+[Fri Nov 14 18:07:05 2025] [DEBUG] User 'bob' | Command: 'VIEW' | Arguments: '-a'
+[Fri Nov 14 18:07:05 2025] [INFO] User 'bob' requested VIEW with args '-a'
+[Fri Nov 14 18:07:10 2025] [DEBUG] User 'bob' | Command: 'VIEW' | Arguments: '-la'
+[Fri Nov 14 18:07:10 2025] [INFO] User 'bob' requested VIEW with args '-la'
+[Fri Nov 14 18:07:21 2025] [INFO] New connection accepted from 127.0.0.1:36252
+[Fri Nov 14 18:07:21 2025] [INFO] Client connected: charlie
+[Fri Nov 14 18:07:21 2025] [DEBUG] Added new user to master list: charlie
+[Fri Nov 14 18:07:25 2025] [DEBUG] User 'charlie' | Command: 'VIEW' | Arguments: '-a'
+[Fri Nov 14 18:07:25 2025] [INFO] User 'charlie' requested VIEW with args '-a'
+[Fri Nov 14 18:07:27 2025] [DEBUG] User 'charlie' | Command: 'VIEW' | Arguments: ''
+[Fri Nov 14 18:07:27 2025] [INFO] User 'charlie' requested VIEW with args ''
+[Fri Nov 14 18:07:30 2025] [DEBUG] User 'charlie' | Command: 'VIEW' | Arguments: '-l'
+[Fri Nov 14 18:07:30 2025] [INFO] User 'charlie' requested VIEW with args '-l'
+[Fri Nov 14 18:07:32 2025] [DEBUG] User 'charlie' | Command: 'VIEW' | Arguments: '-la'
+[Fri Nov 14 18:07:32 2025] [INFO] User 'charlie' requested VIEW with args '-la'
+[Fri Nov 14 18:07:38 2025] [DEBUG] User 'charlie' | Command: 'VIEW' | Arguments: '-al'
+[Fri Nov 14 18:07:38 2025] [INFO] User 'charlie' requested VIEW with args '-al'
+[Fri Nov 14 18:07:49 2025] [INFO] Client 'charlie' disconnected.
+[Fri Nov 14 18:07:49 2025] [DEBUG] Closing connection for charlie
+[Fri Nov 14 18:07:54 2025] [INFO] Client 'bob' disconnected.
+[Fri Nov 14 18:07:54 2025] [DEBUG] Closing connection for bob
+[Fri Nov 14 18:08:11 2025] [INFO] Database initialised
+[Fri Nov 14 18:08:11 2025] [INFO] Loading metadata from disk...
+[Fri Nov 14 18:08:11 2025] [INFO] Metadata load complete.
+[Fri Nov 14 18:08:11 2025] [INFO] Name Server started. Waiting for connections...
+[Fri Nov 14 18:08:15 2025] [INFO] New connection accepted from 127.0.0.1:44482
+[Fri Nov 14 18:08:15 2025] [INFO] Client connected: apple
+[Fri Nov 14 18:08:15 2025] [DEBUG] Added new user to master list: apple
+[Fri Nov 14 18:08:17 2025] [DEBUG] User 'apple' | Command: 'LIST' | Arguments: ''
+[Fri Nov 14 18:08:17 2025] [INFO] User 'apple' requested LIST
+[Fri Nov 14 18:08:23 2025] [INFO] New connection accepted from 127.0.0.1:44490
+[Fri Nov 14 18:08:23 2025] [INFO] Client connected: bob
+[Fri Nov 14 18:08:23 2025] [DEBUG] Added new user to master list: bob
+[Fri Nov 14 18:08:24 2025] [DEBUG] User 'bob' | Command: 'LIST' | Arguments: ''
+[Fri Nov 14 18:08:24 2025] [INFO] User 'bob' requested LIST
+[Fri Nov 14 18:08:27 2025] [DEBUG] User 'bob' | Command: 'VIEW' | Arguments: ''
+[Fri Nov 14 18:08:27 2025] [INFO] User 'bob' requested VIEW with args ''
+[Fri Nov 14 18:08:30 2025] [DEBUG] User 'apple' | Command: 'VIEW' | Arguments: ''
+[Fri Nov 14 18:08:30 2025] [INFO] User 'apple' requested VIEW with args ''
+[Fri Nov 14 18:08:31 2025] [INFO] Client 'apple' disconnected.
+[Fri Nov 14 18:08:31 2025] [DEBUG] Closing connection for apple
+[Fri Nov 14 18:08:33 2025] [INFO] Client 'bob' disconnected.
+[Fri Nov 14 18:08:33 2025] [DEBUG] Closing connection for bob
+[Fri Nov 14 18:08:49 2025] [INFO] New connection accepted from 127.0.0.1:42160
+[Fri Nov 14 18:08:49 2025] [INFO] Client connected: apple
+[Fri Nov 14 18:08:50 2025] [DEBUG] User 'apple' | Command: 'LIST' | Arguments: ''
+[Fri Nov 14 18:08:50 2025] [INFO] User 'apple' requested LIST
+[Fri Nov 14 18:08:53 2025] [INFO] Client 'apple' disconnected.
+[Fri Nov 14 18:08:53 2025] [DEBUG] Closing connection for apple
+[Fri Nov 14 18:08:56 2025] [INFO] New connection accepted from 127.0.0.1:47692
+[Fri Nov 14 18:08:56 2025] [INFO] Client connected: charlie
+[Fri Nov 14 18:08:56 2025] [DEBUG] Added new user to master list: charlie
+[Fri Nov 14 18:08:57 2025] [DEBUG] User 'charlie' | Command: 'LIST' | Arguments: ''
+[Fri Nov 14 18:08:57 2025] [INFO] User 'charlie' requested LIST
+[Fri Nov 14 18:08:59 2025] [INFO] Client 'charlie' disconnected.
+[Fri Nov 14 18:08:59 2025] [DEBUG] Closing connection for charlie

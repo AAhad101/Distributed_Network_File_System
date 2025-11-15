@@ -473,12 +473,19 @@ char *db_get_file_list(const char *username, int show_all, int show_details){
     file_list_str[0] = '\0';
 
     char line_buffer[1024];
-    char time_str[30];
+    char time_str[30];      // Buffer for the formatted time string
 
+    // Lock the database
     pthread_mutex_lock(&db_mutex);
 
-    if(show_all){
-        snprintf(line_buffer, sizeof(line_buffer), "|  Filename  | Words | Chars | Last Access Time | Owner |\n");
+    if(show_details){
+        snprintf(line_buffer, sizeof(line_buffer), "%-20s | %-8s | %-8s | %-26s | %s\n",
+                "Filename", "Words", "Chars", "Last Access Time", "Owner");        
+        strcat(file_list_str, line_buffer);
+
+        snprintf(line_buffer, sizeof(line_buffer),
+                "---------------------|----------|----------|----------------------------|------\n");
+        strcat(file_list_str, line_buffer);
     }
 
     // Iterate over every bucket (index) in the hash table
@@ -507,15 +514,15 @@ char *db_get_file_list(const char *username, int show_all, int show_details){
                 if(show_details){
                     // Formatting time string
                     ctime_r(&(current_file->metadata.time_last_accessed), time_str);
-                    time_str[strcspn(time_str, "\n")] = '\0';
+                    time_str[strcspn(time_str, "\n")] = '\0';   // Remove the newline from the time string
 
                     // -l flag is present so we have to print all the details
                     snprintf(line_buffer, sizeof(line_buffer),
-                            "%-20s | WC: %-8lu | CC: %-8lu | Last Access: %-26s | Owner: %s\n",
+                            "%-20s | %-8lu | %-8lu | %-26s | %s\n",
                             current_file->filename,
                             current_file->metadata.word_count,
                             current_file->metadata.char_count,
-                            current_file->metadata.time_last_accessed,
+                            time_str,
                             current_file->metadata.owner
                     );
                 }

@@ -115,6 +115,9 @@ void *handle_connection(void *socket_desc){
             else if(strcmp(command, "INFO") == 0){
                 handle_info_command(client_socket, username, args);
             }
+            else if(strcmp(command, "VIEW") == 0){
+                handle_view_command(client_socket, username, args);
+            }
             else{
                 // TODO: Similar stuff for all user functions
 

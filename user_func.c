@@ -149,3 +149,45 @@ void handle_info_command(int client_socket, const char *username, const char *ar
 
     write(client_socket, response, strlen(response));
 }
+
+// Handles "VIEW" command with flags "l" and "a"
+void handle_view_command(int client_socket, const char *username, const char *args){
+    char log_msg[200];
+    sprintf(log_msg, "User '%s' requested VIEW with args '%s'", username, args);
+    log_event(LOG_LEVEL_INFO, log_msg);
+
+    // Parse flags
+    int show_all = 0;
+    int show_details = 0;
+
+    if(args[0] == '-'){
+        for(int i = 1; args[i] != '\0'; i++){
+            if(args[i] == 'a'){
+                show_all = 1;
+            }
+            else if(args[i] == 'l'){
+                show_details = 1;
+            }
+            else{
+                write(client_socket, MSG_MALFORMED, strlen(MSG_MALFORMED));
+                return;
+            }
+        }
+    }
+
+    // Call db_get_file_list() to get formatted response string
+    char *file_list = db_get_file_list(username, show_all, show_details);
+
+    if(file_list){
+        if(strlen(file_list) == 0){
+            write(client_socket, "No files found.\n", 16);
+        }
+        else{
+            write(client_socket, file_list, strlen(file_list));
+        }
+        free(file_list);
+    }
+    else{
+        send_error_message(client_socket, "Could not retrieve file list.");
+    }
+}

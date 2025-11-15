@@ -14,6 +14,12 @@ void handle_list_command(int client_socket, const char *username, const char *ar
 void handle_info_command(int client_socket, const char *username, const char *args);
 
 /*
+ * Handles the "VIEW -l/-a" command
+ * Retrieves the appropriate files and displays to the user
+*/
+void handle_view_command(int client_socket, const char *username, const char *args);
+
+/*
  * Handles the "CREATE <filename>" command
  * Creates a new file in an SS 
 */

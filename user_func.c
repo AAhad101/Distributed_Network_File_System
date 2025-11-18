@@ -437,6 +437,9 @@ void handle_remaccess_command(int client_socket, const char *username, const cha
     else if(result == 401){
         write(client_socket, MSG_UNAUTHORIZED, strlen(MSG_UNAUTHORIZED));
     } 
+    else if(result == 441){
+        write(client_socket, MSG_CANNOT_REMOVE_ACCESS_FROM_OWNER, strlen(MSG_CANNOT_REMOVE_ACCESS_FROM_OWNER));
+    }
     else{
         send_error_message(client_socket, "Internal Server Error");
     }

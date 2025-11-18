@@ -17,10 +17,6 @@
 static char file_list_buffer[MAX_FILE_BUFFER] = {0};
 static char global_storage_path[1024];
 
-// IP of SS
-// TODO: Should use some sort of get ip function instead of localhost
-#define MY_IP "127.0.0.1"
-
 // File callback function for ftw
 int file_callback(const char *fpath, const struct stat *sb, int typeflag){
     // We care only about regular files (FTW_F), not directories and stuff
@@ -214,6 +210,10 @@ int main(int argc, char *argv[]){
         log_event(LOG_LEVEL_ERROR, "Invalid port: Ports must be > 1024.");
         exit(EXIT_FAILURE);
     }
+
+    // Getting IP of SS
+    char my_ip[16];
+    get_local_ip(my_ip, sizeof(my_ip));
     
     sprintf(log_msg, "SS starting. NM Port: %d, Client Port: %d, Path: %s", my_nm_port, my_client_port, global_storage_path);
     log_event(LOG_LEVEL_INFO, log_msg);
@@ -269,7 +269,7 @@ int main(int argc, char *argv[]){
     /*// TODO: I guess I have to scan some directory to get this list
     const char *file_list = "file1.txt file2.txt project_doc.txt";*/
 
-    int n = sprintf(buffer, "%s %s %d %d %s", CMD_REG_SS, MY_IP, my_nm_port, my_client_port, file_list_buffer);
+    int n = sprintf(buffer, "%s %s %d %d %s\n", CMD_REG_SS, my_ip, my_nm_port, my_client_port, file_list_buffer);
 
     sprintf(log_msg, "Sending registration: %s", buffer);
     log_event(LOG_LEVEL_DEBUG, log_msg); // DEBUG level, as it's verbose

@@ -37,4 +37,7 @@ void log_event(int level, const char *message);
 #define LOG_LEVEL_WARN  2
 #define LOG_LEVEL_ERROR 3
 
+// Finds the local IP address of this machine by connecting to a public DNS 
+void get_local_ip(char *buffer, size_t len);
+
 #endif

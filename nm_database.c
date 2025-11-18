@@ -801,11 +801,17 @@ int db_remove_permission(const char *filename, const char *requestor, const char
         return 401;
     }
 
-    // 3. Remove from BOTH lists (Read and Write)
+    // 3. Prevent removing the owner's access
+    if(strcmp(node->metadata.owner, target_user) == 0){
+        pthread_mutex_unlock(&db_mutex);
+        return 441;
+    }
+    
+    // 4. Remove from BOTH lists (Read and Write)
     int removed_r = remove_from_list(&(node->metadata.read_permissions_head), target_user);
     int removed_w = remove_from_list(&(node->metadata.write_permissions_head), target_user);
 
-    // 4. Save if anything changed
+    // 5. Save if anything changed
     if(removed_r || removed_w){
         db_save_to_disk_locked();
     }

@@ -4,6 +4,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <unistd.h>
 
 // Global logging mutex definition
 pthread_mutex_t log_mutex;
@@ -59,4 +64,48 @@ void log_event(int level, const char *message){
 
     // 5. Release the lock
     pthread_mutex_unlock(&log_mutex);
+}
+
+void get_local_ip(char *buffer, size_t len){
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if(sock < 0){
+        perror("Socket creation failed");
+        // Fallback to localhost if socket fails
+        strncpy(buffer, "127.0.0.1", len);
+        return;
+    }
+
+    const char* kGoogleDnsIp = "8.8.8.8";
+    uint16_t kDnsPort = 53;
+
+    struct sockaddr_in serv;
+    memset(&serv, 0, sizeof(serv));
+    serv.sin_family = AF_INET;
+    serv.sin_addr.s_addr = inet_addr(kGoogleDnsIp);
+    serv.sin_port = htons(kDnsPort);
+
+    // We don't actually send data, just "connect" to determine routing interface
+    if(connect(sock, (const struct sockaddr*)&serv, sizeof(serv)) < 0){
+        perror("Error connecting");
+        close(sock);
+        strncpy(buffer, "127.0.0.1", len);
+        return;
+    }
+
+    struct sockaddr_in name;
+    socklen_t namelen = sizeof(name);
+    if(getsockname(sock, (struct sockaddr*)&name, &namelen) < 0){
+        perror("getsockname failed");
+        close(sock);
+        strncpy(buffer, "127.0.0.1", len);
+        return;
+    }
+
+    const char* p = inet_ntop(AF_INET, &name.sin_addr, buffer, len);
+    if(p == NULL){
+        perror("inet_ntop failed");
+        strncpy(buffer, "127.0.0.1", len);
+    }
+
+    close(sock);
 }

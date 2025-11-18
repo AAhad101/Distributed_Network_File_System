@@ -1,4 +1,0 @@
-FILE|doc.txt|0|0|0|1763449954|1763449954|1763449954|alice
-PERM|doc.txt|R|bob
-PERM|doc.txt|R|alice
-PERM|doc.txt|W|alice

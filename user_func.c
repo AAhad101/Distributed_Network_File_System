@@ -292,6 +292,14 @@ void handle_create_command(int client_socket, const char * username, const char 
         write(client_socket, MSG_SUCCESS, strlen(MSG_SUCCESS));
     }
     else{
+        // Rollback
+        char err_msg[200];
+        sprintf(err_msg, "SS failed to create file. Rolling back metadata for: %s", filename);
+        log_event(LOG_LEVEL_WARN, err_msg);
+
+        // Delete the metadata we just created so the DB stays consistent
+        db_delete_file(filename);
+
         // TODO: Rollback the metadata creation (i.e., delete the file metadata)
         send_error_message(client_socket, "Storage server failed to create file.");
     }

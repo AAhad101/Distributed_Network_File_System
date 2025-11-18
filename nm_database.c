@@ -11,6 +11,55 @@ static StorageServerInfo ss_list[MAX_SS_COUNT];     // List of connected storage
 static UserNode *user_list_head = NULL;             // Master list of all registered users
 pthread_mutex_t db_mutex;                           // Mutex to protect all database operations
 
+// Cache implementation
+#define CACHE_SIZE 10
+static FileNode* lru_cache[CACHE_SIZE] = {NULL};
+
+// Helper to move a node to the front of the cache (Most Recently Used)
+static void lru_update(FileNode* node){
+    int i;
+    int found_index = -1;
+
+    // 1. Check if node is already in cache
+    for(i = 0; i < CACHE_SIZE; i++){
+        if(lru_cache[i] == node){
+            found_index = i;    // Cache hit
+            break;
+        }
+    }
+
+    // 2. If not found, we will shift everything (evicting the last one)
+    //    If found, we will shift everything up to found_index
+    int limit = (found_index == -1) ? (CACHE_SIZE - 1) : found_index;
+
+    for(i = limit; i > 0; i--){
+        lru_cache[i] = lru_cache[i - 1];
+    }
+
+    // 3. Place new node at front
+    lru_cache[0] = node;
+}
+
+// Helper to remove a node from cache (used when a file is deleted)
+static void lru_remove(FileNode* node){
+    int i;
+    int found_index = -1;
+    for(i = 0; i < CACHE_SIZE; i++){
+        if(lru_cache[i] == node){
+            found_index = i;
+            break;
+        }
+    }
+
+    if(found_index != -1){
+        // Shift everything after it to fill the gap
+        for(i = found_index; i < CACHE_SIZE - 1; i++){
+            lru_cache[i] = lru_cache[i + 1];
+        }
+        lru_cache[CACHE_SIZE - 1] = NULL; // Clear the last spot
+    }
+}
+
 // The hash function for the filename string
 // djb2 string hash function
 static unsigned long db_hash(const char *str){
@@ -31,14 +80,38 @@ static void db_insert_node(FileNode *new_node){
     hash_table[hash_index] = new_node;
 }
 
-// Function to find file in the hash table
-// Average time complexity - O(1)
-// Worst case time complexity - O(k) [k = No. of files]
+/*
+ * Function to find file in the hash table
+ * Average time complexity - O(1)
+ * Worst case time complexity - O(k) [k = No. of files]
+ 
+ * Implemented with caching, so first checks cash and in case of miss, checks hash map
+*/
 FileNode *db_find_node_internal(const char *filename){
+    char log_msg[200];
+
+    // 1. Check cache first
+    for(int i = 0; i < CACHE_SIZE; i++){
+        if(lru_cache[i] != NULL && strcmp(lru_cache[i]->filename, filename) == 0){
+            // Cache hit
+            sprintf(log_msg, "CACHE HIT: Found '%s' in LRU cache.", filename);
+            log_event(LOG_LEVEL_DEBUG, log_msg);
+
+            lru_update(lru_cache[i]); // Move to front
+            return lru_cache[i];
+        }
+    }
+
+    // 2. Cache miss; search hash table
+    sprintf(log_msg, "CACHE MISS: Searching DB for '%s'...", filename);
+    log_event(LOG_LEVEL_DEBUG, log_msg);
+    
     unsigned long hash_index = db_hash(filename) % HASH_TABLE_SIZE;
     FileNode *current = hash_table[hash_index];
     while(current != NULL){
         if(strcmp(current->filename, filename) == 0){
+            // Found in DB, add to cache
+            lru_update(current);
             return current;
         }
         current = current->next;
@@ -658,7 +731,9 @@ int db_delete_file(const char* filename){
 
     while(current != NULL){
         if(strcmp(current->filename, filename) == 0){
-            // Found the file, have to unlink from the list
+            // Found the file, have to unlink from the list and delete from cache
+            lru_remove(current);    // Remove from cache
+
             if(prev == NULL){
                 hash_table[hash_index] = current->next;
             }

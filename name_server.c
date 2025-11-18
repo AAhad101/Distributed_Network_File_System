@@ -118,6 +118,18 @@ void *handle_connection(void *socket_desc){
             else if(strcmp(command, "VIEW") == 0){
                 handle_view_command(client_socket, username, args);
             }
+            else if(strcmp(command, "CREATE") == 0){
+                handle_create_command(client_socket, username, args);
+            }
+            else if(strcmp(command, "DELETE") == 0){
+                handle_delete_command(client_socket, username, args);
+            }
+            else if(strcmp(command, "ADDACCESS") == 0){
+                handle_addaccess_command(client_socket, username, args);
+            }
+            else if(strcmp(command, "REMACCESS") == 0){
+                handle_remaccess_command(client_socket, username, args);
+            }
             else{
                 // TODO: Similar stuff for all user functions
 

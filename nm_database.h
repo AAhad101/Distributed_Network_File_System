@@ -72,6 +72,9 @@ void db_load_from_disk();
 */
 void db_save_to_disk();
 
+// Same as db_save_to_disk but caller has to lock the database
+void db_save_to_disk_locked();
+
 // Finds the metadata for a file
 FileMetadata *db_find_file(const char *filename);
 
@@ -98,16 +101,19 @@ char *db_get_file_list(const char *username, int show_all, int show_details);
 FileNode *db_find_node_internal(const char *filename);
 
 /*
- * Atomically finds a file, checks read permission and updates access time
- * Returns 0 on success or an error code like 404 or 401 on failure
+ * This function checks for file existence, selects an SS,
+ * and adds the new file metadata to the database, then saves to the disk
 */
-//int db_get_and_update_info(const char *filename, const char *username, FileMetadata *meta_out);
+int db_create_file(const char *filename, const char *owner, StorageServerInfo *ss_out);
 
-// 
-void db_add_permission(const char *filename, const char *username, char type);
+// Deletes a file entry from the database and saves updated metadata to the disk
+int db_delete_file(const char* filename);
 
-//
-void db_remove_permission(const char *filename, const char *username);
+// Adds read/write permission for a user to a file and returns appropriate success/error code  
+int db_add_permission(const char *filename, const char *requestor, const char *target_user, char type);
+
+// Removes all access for a user from a file and returns appropriate success/error code
+int db_remove_permission(const char *filename, const char *requestor, const char *target_user);
 
 #endif
 

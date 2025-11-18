@@ -1,11 +1,4 @@
-FILE|report.txt|alice|1024|150|1024|1731566400|1731566400|1731566400|alice
-PERM|report.txt|R|alice
-PERM|report.txt|W|alice
-PERM|report.txt|R|bob
-FILE|project.plan|bob|2048|300|2048|1731570000|1731570000|1731570000|bob
-PERM|project.plan|R|bob
-PERM|project.plan|W|bob
-PERM|project.plan|W|alice
-FILE|secret.dat|charlie|512|50|512|1731573600|1731573600|1731573600|charlie
-PERM|secret.dat|R|charlie
-PERM|secret.dat|W|charlie
+FILE|doc.txt|0|0|0|1763449954|1763449954|1763449954|alice
+PERM|doc.txt|R|bob
+PERM|doc.txt|R|alice
+PERM|doc.txt|W|alice

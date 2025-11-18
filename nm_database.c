@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "nm_database.h"
 #include "utils.h"
 
@@ -216,16 +217,14 @@ void db_save_to_disk(){
     log_event(LOG_LEVEL_DEBUG, "Metadata save complete.");
 }
 
-/*
- * Non-locking save function (called in db_get_and_update_info())
- * The caller locks and unlocks accordingly
- * Same as db_save_to_disk other than the locking part
-*/
+// Same as db_save_to_disk except the caller has to lock the database
+void db_save_to_disk_locked(){
+    log_event(LOG_LEVEL_DEBUG, "Saving metadata to disk...");
 
-/*static void db_save_to_disk_locked(){
     FILE *file = fopen(NM_METADATA_FILE, "w");
     if(file == NULL){
         log_event(LOG_LEVEL_ERROR, "Could not open metadata file for writing.");
+        pthread_mutex_unlock(&db_mutex);
         return;
     }
 
@@ -266,7 +265,7 @@ void db_save_to_disk(){
 
     fclose(file);
     log_event(LOG_LEVEL_DEBUG, "Metadata save complete.");
-}*/
+}
 
 // Function to add a new user to the master list of users
 void db_add_user(const char *username){
@@ -543,40 +542,274 @@ char *db_get_file_list(const char *username, int show_all, int show_details){
     return file_list_str;
 }
 
-// Atomic function to find file, check permissions, and update access time
-/*int db_get_and_update_info(const char *filename, const char *username, FileMetadata *meta_out){
-    int error_code = 0;
+static StorageServerInfo *db_select_ss(){
+    static int next_ss_index = 0;   // Remembers the last SS used
 
-    // 1. Lock the database 
+    // Find the total number of active servers
+    int active_ss_count = 0;
+    for(int i = 0; i < MAX_SS_COUNT; i++){
+        if(ss_list[i].ip[0] != '\0'){
+            active_ss_count++;
+        }
+    }
+
+    if(active_ss_count == 0){
+        return NULL;    // No servers available
+    }
+
+    // Simple round-robin to find the next active slot 
+    while(1){
+        int index = next_ss_index % MAX_SS_COUNT;
+        next_ss_index++;
+
+        if(ss_list[index].ip[0] != '\0'){
+            return &ss_list[index]; // Active server found
+        }
+    }
+}
+
+// Main function to create a new file
+int db_create_file(const char *filename, const char *owner, StorageServerInfo *ss_out){
+    char log_msg[300];
+
+    // 1. Lock the database for the transaction
     pthread_mutex_lock(&db_mutex);
 
-    // 2. Find the file
-    FileNode *node = db_find_node_internal(filename);
-    if(node == NULL){
-        error_code = 404;   // File not found
+    // 2. Check if the file already exists
+    if(db_find_node_internal(filename) != NULL){
         pthread_mutex_unlock(&db_mutex);
-        return error_code;
+        return 409; // ERROR_FILE_ALREADY_EXISTS
     }
 
-    // 3. Check permission
-    if(!db_check_permission(&(node->metadata), username, 'R')){
-        error_code = 401;   // Unauthorised
+    // 3. Select a storage server
+    StorageServerInfo *chosen_ss = db_select_ss();
+    if(chosen_ss == NULL){
         pthread_mutex_unlock(&db_mutex);
-        return error_code;
+        return 503; // ERROR_NO_STORAGE_SERVERS
     }
 
-    // 4. Update the metadata
-    node->metadata.time_last_accessed = time(NULL);
-    strncpy(node->metadata.user_last_accessed, username, sizeof(node->metadata.user_last_accessed) - 1);
+    // 4. Create new metadata
+    FileNode *new_node = (FileNode *)malloc(sizeof(FileNode));
+    if(new_node == NULL){
+        pthread_mutex_unlock(&db_mutex);
+        return 500; // ERROR_CANNOT_CREATE_FILE
+    }
 
-    // 5. Save the changes to the disk to ensure persistence
-    db_save_to_disk_locked();  // This function assumes the caller locks
+    strncpy(new_node->filename, filename, sizeof(new_node->filename) - 1);
+    strncpy(new_node->metadata.owner, owner, sizeof(new_node->metadata.owner) - 1);
 
-    // 6. Copy the data to the output struct for the user
-    memcpy(meta_out, &(node->metadata), sizeof(FileMetadata));
+    // Set initial metadata
+    new_node->metadata.size = 0;
+    new_node->metadata.word_count = 0;
+    new_node->metadata.char_count = 0;
+    new_node->metadata.time_created = time(NULL);
+    new_node->metadata.time_last_modified = time(NULL);
+    new_node->metadata.time_last_accessed = time(NULL);
+    strncpy(new_node->metadata.user_last_accessed, owner, sizeof(new_node->metadata.user_last_accessed) - 1);
 
-    // 7. Unlock the database before returning
+    // Set the location
+    new_node->metadata.location = chosen_ss;
+
+    // Set permissions (Owner gets both R and W permissions)
+    UserAccessNode *read_perm = (UserAccessNode *)malloc(sizeof(UserAccessNode));
+    strncpy(read_perm->username, owner, sizeof(read_perm->username) - 1);
+    read_perm->next = NULL;
+    new_node->metadata.read_permissions_head = read_perm;
+
+    UserAccessNode *write_perm = (UserAccessNode *)malloc(sizeof(UserAccessNode));
+    strncpy(write_perm->username, owner, sizeof(write_perm->username) - 1);
+    write_perm->next = NULL;
+    new_node->metadata.write_permissions_head = write_perm;
+
+    // 5. Add node to hash table
+    db_insert_node(new_node);
+
+    sprintf(log_msg, "Created metadata for '%s' (Owner: %s) on SS at %s:%d", filename, owner, chosen_ss->ip, chosen_ss->client_port);
+    log_event(LOG_LEVEL_INFO, log_msg);
+
+    // 6. Save new metadata to disk
+    db_save_to_disk_locked();
+
+    // 7. Copy the chosen SS information into the output parameter
+    memcpy(ss_out, chosen_ss, sizeof(StorageServerInfo));
+
+    // 8. Unlock the database and return
     pthread_mutex_unlock(&db_mutex);
+    return 0;   // SUCCESS
+}
+
+// Helper to free a permission list
+static void free_permission_list(UserAccessNode *head){
+    UserAccessNode *current = head;
+    while(current != NULL){
+        UserAccessNode *next = current->next;
+        free(current);
+        current = next;
+    }
+}
+
+// Deletes a file entry from the database and saves updated metadata to the disk
+int db_delete_file(const char* filename){
+    pthread_mutex_lock(&db_mutex);
+
+    unsigned long hash_index = db_hash(filename) % HASH_TABLE_SIZE;
+    FileNode* current = hash_table[hash_index];
+    FileNode* prev = NULL;
+
+    while(current != NULL){
+        if(strcmp(current->filename, filename) == 0){
+            // Found the file, have to unlink from the list
+            if(prev == NULL){
+                hash_table[hash_index] = current->next;
+            }
+            else{
+                prev->next = current->next;
+            }
+
+            // Free metadata resources
+            free_permission_list(current->metadata.read_permissions_head);
+            free_permission_list(current->metadata.write_permissions_head);
+            free(current);
+
+            // Save changes to disk
+            db_save_to_disk_locked();
+
+            pthread_mutex_unlock(&db_mutex);
+            return 0;   // SUCCESS
+        }
+        prev = current;
+        current = current->next;
+    }
+
+    pthread_mutex_unlock(&db_mutex);
+    return 404; // Not found
+}
+
+/*
+ * Checks if a user exists in the master user list
+ * Assumes mutex is held
+*/
+static int user_exists(const char *username){
+    UserNode *current = user_list_head;
+    while(current != NULL){
+        if(strcmp(current->username, username) == 0){
+            return 1;
+        }
+        current = current->next;
+    }
+    return 0;
+}
+
+/*
+ * Helper to remove a node from a permission list
+ * Returns 1 if removed, 0 if not found
+*/
+static int remove_from_list(UserAccessNode** head_ptr, const char* username){
+    UserAccessNode* current = *head_ptr;
+    UserAccessNode* prev = NULL;
+
+    while(current != NULL){
+        if(strcmp(current->username, username) == 0){
+            // Found it; unlink it
+            if(prev == NULL){
+                *head_ptr = current->next;
+            }
+            else{
+                prev->next = current->next;
+            }
+            free(current);
+            return 1;
+        }
+        prev = current;
+        current = current->next;
+    }
 
     return 0;
-}*/
+}
+
+int db_add_permission(const char *filename, const char *requestor, const char *target_user, char type){
+    pthread_mutex_lock(&db_mutex);
+
+    FileNode* node = db_find_node_internal(filename);
+
+    // 1. Check File Exists
+    if(node == NULL){
+        pthread_mutex_unlock(&db_mutex);
+        return 404;
+    }
+ 
+    // 2. Check Ownership (Only owner can change permissions)
+    if(strcmp(node->metadata.owner, requestor) != 0){
+        pthread_mutex_unlock(&db_mutex);
+        return 401;
+    }
+
+    // 3. Check if Target User Exists
+    if(!user_exists(target_user)){
+        pthread_mutex_unlock(&db_mutex);
+        return 440; // User not found code
+    }
+
+    // 4. Determine which list to add to
+    UserAccessNode **list_head;
+    if(type == 'R'){
+        list_head = &(node->metadata.read_permissions_head);
+    } 
+    else if(type == 'W'){
+        list_head = &(node->metadata.write_permissions_head);
+    } 
+    else{
+        pthread_mutex_unlock(&db_mutex);
+        return 400;
+    }
+
+    // 5. Check for Duplicate (Don't add if already there)
+    if(is_user_in_list(*list_head, target_user)){
+        pthread_mutex_unlock(&db_mutex);
+        return 200; // Already done, treat as success
+    }
+
+    // 6. Add to List
+    UserAccessNode *new_perm = (UserAccessNode*)malloc(sizeof(UserAccessNode));
+    strncpy(new_perm->username, target_user, sizeof(new_perm->username) - 1);
+    new_perm->username[sizeof(new_perm->username) - 1] = '\0';
+
+    new_perm->next = *list_head;
+    *list_head = new_perm;
+
+    // 7. Save and Finish
+    db_save_to_disk_locked();
+    pthread_mutex_unlock(&db_mutex);
+    
+    return 200;
+}
+
+int db_remove_permission(const char *filename, const char *requestor, const char *target_user){
+    pthread_mutex_lock(&db_mutex);
+    
+    FileNode* node = db_find_node_internal(filename);
+
+    // 1. Check File Exists
+    if(node == NULL){
+        pthread_mutex_unlock(&db_mutex);
+        return 404;
+    }
+
+    // 2. Check Ownership
+    if(strcmp(node->metadata.owner, requestor) != 0){
+        pthread_mutex_unlock(&db_mutex);
+        return 401;
+    }
+
+    // 3. Remove from BOTH lists (Read and Write)
+    int removed_r = remove_from_list(&(node->metadata.read_permissions_head), target_user);
+    int removed_w = remove_from_list(&(node->metadata.write_permissions_head), target_user);
+
+    // 4. Save if anything changed
+    if(removed_r || removed_w){
+        db_save_to_disk_locked();
+    }
+
+    pthread_mutex_unlock(&db_mutex);
+    return 200;
+}

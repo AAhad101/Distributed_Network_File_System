@@ -115,6 +115,12 @@ int db_add_permission(const char *filename, const char *requestor, const char *t
 // Removes all access for a user from a file and returns appropriate success/error code
 int db_remove_permission(const char *filename, const char *requestor, const char *target_user);
 
+/**
+ * Updates the last accessed time/user and persists the change to disk
+ * return 0 on success, 404 if file is not found
+*/
+int db_update_access_time(const char* filename, const char* username);
+
 #endif
 
 

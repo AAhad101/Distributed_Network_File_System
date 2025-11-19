@@ -496,7 +496,10 @@ void handle_read_command(int client_socket, const char *username, const char *ar
         return;
     }
 
-    // 4. Send redirect message: "200 <IP> <Client_Port>"
+    // 4. Update and save last access time
+    db_update_access_time(filename, username);
+
+    // 5. Send redirect message: "200 <IP> <Client_Port>"
     char response[MAX_BUFFER];
     snprintf(response, sizeof(response), "200 %s %d\n", ss->ip, ss->client_port);
 
@@ -547,7 +550,10 @@ void handle_stream_command(int client_socket, const char *username, const char *
         return;
     }
 
-    // 4. Send redirect message: "200 <IP> <Client_Port>"
+    // 4. Update and save last access time
+    db_update_access_time(filename, username);
+
+    // 5. Send redirect message: "200 <IP> <Client_Port>"
     char response[MAX_BUFFER];
     snprintf(response, sizeof(response), "200 %s %d\n", ss->ip, ss->client_port);
 

@@ -894,3 +894,22 @@ int db_remove_permission(const char *filename, const char *requestor, const char
     pthread_mutex_unlock(&db_mutex);
     return 200;
 }
+
+// Caller must hold db_mutex
+int db_update_access_time(const char *filename, const char *username){
+    // 1. Find the file (uses cache internally)
+    FileNode* node = db_find_node_internal(filename);
+
+    if(node == NULL){
+        pthread_mutex_unlock(&db_mutex);
+        return 404; // Not found
+    }
+
+    // 2. Update the fields
+    node->metadata.time_last_accessed = time(NULL);
+    strncpy(node->metadata.user_last_accessed, username, sizeof(node->metadata.user_last_accessed) - 1);
+
+    // 3. Persist the change
+    db_save_to_disk_locked();
+    return 0;
+}

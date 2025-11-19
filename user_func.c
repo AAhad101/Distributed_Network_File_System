@@ -10,6 +10,8 @@
 #include "utils.h"
 #include "protocol.h"
 
+#define LOG_BUFFER_SIZE 512
+
 // A helper function to send a standard error message
 void send_error_message(int client_socket, const char *message){
     char buffer[MAX_BUFFER];
@@ -19,7 +21,7 @@ void send_error_message(int client_socket, const char *message){
 
 // Handles the "LIST" command
 void handle_list_command(int client_socket, const char *username, const char *args){
-    char log_msg[200];
+    char log_msg[LOG_BUFFER_SIZE];
     sprintf(log_msg, "User '%s' requested LIST", username);
     log_event(LOG_LEVEL_INFO, log_msg);
 
@@ -43,7 +45,7 @@ void handle_list_command(int client_socket, const char *username, const char *ar
 
 // Handles the "INFO" command
 void handle_info_command(int client_socket, const char *username, const char *args){
-    char log_msg[200];
+    char log_msg[LOG_BUFFER_SIZE];
     char filename[256];
 
     // Getting the filename from the args
@@ -153,7 +155,7 @@ void handle_info_command(int client_socket, const char *username, const char *ar
 
 // Handles "VIEW" command with flags "l" and "a"
 void handle_view_command(int client_socket, const char *username, const char *args){
-    char log_msg[200];
+    char log_msg[LOG_BUFFER_SIZE];
     sprintf(log_msg, "User '%s' requested VIEW with args '%s'", username, args);
     log_event(LOG_LEVEL_INFO, log_msg);
 
@@ -252,7 +254,7 @@ int send_command_to_ss(StorageServerInfo *ss, const char *command){
 // Handles the "CREATE <filename>" command
 void handle_create_command(int client_socket, const char * username, const char *args){
     char filename[256];
-    char log_msg[300];
+    char log_msg[LOG_BUFFER_SIZE];
 
     // 1. Parse filename
     if(sscanf(args, "%s", filename) != 1){
@@ -293,7 +295,7 @@ void handle_create_command(int client_socket, const char * username, const char 
     }
     else{
         // Rollback
-        char err_msg[200];
+        char err_msg[MAX_BUFFER];
         sprintf(err_msg, "SS failed to create file. Rolling back metadata for: %s", filename);
         log_event(LOG_LEVEL_WARN, err_msg);
 
@@ -308,7 +310,7 @@ void handle_create_command(int client_socket, const char * username, const char 
 // Handles the "DELETE <filename>" command
 void handle_delete_command(int client_socket, const char *username, const char *args){
     char filename[256];
-    char log_msg[300];
+    char log_msg[LOG_BUFFER_SIZE];
 
     if(sscanf(args, "%s", filename) != 1){
         write(client_socket, MSG_MALFORMED, strlen(MSG_MALFORMED));
@@ -375,7 +377,7 @@ void handle_addaccess_command(int client_socket, const char *username, const cha
     char flag[5];
     char filename[256];
     char target_user[100];
-    char log_msg[300];
+    char log_msg[LOG_BUFFER_SIZE];
 
     // Parse args
     if(sscanf(args, "%s %s %s", flag, filename, target_user) != 3){
@@ -422,7 +424,7 @@ void handle_addaccess_command(int client_socket, const char *username, const cha
 void handle_remaccess_command(int client_socket, const char *username, const char *args){
     char filename[256];
     char target_user[100];
-    char log_msg[300];
+    char log_msg[LOG_BUFFER_SIZE];
 
     // Parse args
     if(sscanf(args, "%s %s", filename, target_user) != 2){
@@ -451,4 +453,107 @@ void handle_remaccess_command(int client_socket, const char *username, const cha
     else{
         send_error_message(client_socket, "Internal Server Error");
     }
+}
+
+// Handles the "READ <filename>" command
+void handle_read_command(int client_socket, const char *username, const char *args){
+    char log_msg[LOG_BUFFER_SIZE];
+    char filename[256];
+
+    // Parse filename
+    if(sscanf(args, "%s", filename) != 1){
+        write(client_socket, MSG_MALFORMED, strlen(MSG_MALFORMED));
+        return;
+    }
+
+    sprintf(log_msg, "User '%s' requested READ for '%s'", username, filename);
+    log_event(LOG_LEVEL_INFO, log_msg);
+
+    // Lock the database
+    pthread_mutex_lock(&db_mutex);
+
+    // 1. Find the file
+    FileNode *node = db_find_node_internal(filename); // Checks cache and then the hash map
+
+    if(node == NULL){
+        pthread_mutex_unlock(&db_mutex);
+        write(client_socket, MSG_FILE_NOT_FOUND, strlen(MSG_FILE_NOT_FOUND));
+        return;
+    }
+
+    // 2. Check permissions (read access)
+    if(!db_check_permission(&(node->metadata), username, 'R')){
+        pthread_mutex_unlock(&db_mutex);
+        write(client_socket, MSG_UNAUTHORIZED, strlen(MSG_UNAUTHORIZED));
+        return;
+    }
+
+    // 3. Get the Storage Server info
+    StorageServerInfo *ss = node->metadata.location;
+    if(ss == NULL){
+        pthread_mutex_unlock(&db_mutex);
+        send_error_message(client_socket, "File is offline (SS down).");
+        return;
+    }
+
+    // 4. Send redirect message: "200 <IP> <Client_Port>"
+    char response[MAX_BUFFER];
+    snprintf(response, sizeof(response), "200 %s %d\n", ss->ip, ss->client_port);
+
+    pthread_mutex_unlock(&db_mutex);
+
+    // Send the IP/Port to the client
+    write(client_socket, response, strlen(response));
+}
+
+// Handles the "STREAM <filename>" command
+void handle_stream_command(int client_socket, const char *username, const char *args){
+    char log_msg[LOG_BUFFER_SIZE];
+    char filename[256];
+
+    // Parse filename
+    if(sscanf(args, "%s", filename) != 1){
+        write(client_socket, MSG_MALFORMED, strlen(MSG_MALFORMED));
+        return;
+    }
+
+    sprintf(log_msg, "User '%s' requested STREAM for '%s'", username, filename);
+    log_event(LOG_LEVEL_INFO, log_msg);
+
+    // Lock the database
+    pthread_mutex_lock(&db_mutex);
+
+    // 1. Find the file
+    FileNode *node = db_find_node_internal(filename); // Checks cache and then the hash map
+
+    if(node == NULL){
+        pthread_mutex_unlock(&db_mutex);
+        write(client_socket, MSG_FILE_NOT_FOUND, strlen(MSG_FILE_NOT_FOUND));
+        return;
+    }
+
+    // 2. Check permissions (read access)
+    if(!db_check_permission(&(node->metadata), username, 'R')){
+        pthread_mutex_unlock(&db_mutex);
+        write(client_socket, MSG_UNAUTHORIZED, strlen(MSG_UNAUTHORIZED));
+        return;
+    }
+
+    // 3. Get the Storage Server info
+    StorageServerInfo *ss = node->metadata.location;
+    if(ss == NULL){
+        pthread_mutex_unlock(&db_mutex);
+        send_error_message(client_socket, "File is offline (SS down).");
+        return;
+    }
+
+    // 4. Send redirect message: "200 <IP> <Client_Port>"
+    char response[MAX_BUFFER];
+    snprintf(response, sizeof(response), "200 %s %d\n", ss->ip, ss->client_port);
+
+    pthread_mutex_unlock(&db_mutex);
+
+    // Send the IP/Port to the client
+    write(client_socket, response, strlen(response));
+
 }

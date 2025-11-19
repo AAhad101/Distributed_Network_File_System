@@ -99,10 +99,31 @@ void *handle_connection(void *socket_desc){
             char parse_buffer[MAX_BUFFER];
             strncpy(parse_buffer, buffer, MAX_BUFFER);
 
+            /*
             // Separate the command from the arguments
             char *command = strtok(parse_buffer, " ");  // Gets the command
-            char *args = strtok(NULL, "");              // Gets the rest of the string (args)
-            if(args == NULL){
+            char *args = strtok(NULL, "");              // Gets the arguments
+            */
+
+            ///////////
+            char *args;
+            char *command = buffer; // Command starts at the beginning
+            
+            // Find the first space to separate command from arguments
+            char *space = strchr(buffer, ' ');
+            
+            if (space != NULL) {
+                *space = '\0';      // Null-terminate the command word
+                args = space + 1; // Arguments start after the space
+                
+                // Handle trailing newline/whitespace in arguments
+                args[strcspn(args, "\n")] = 0;
+            } else {
+                args = ""; // Command has no arguments
+            }
+            ///////////
+
+            if(args == NULL || *args == '\0'){
                 args = "";      // This is to ensure that args isn't NULL
             }
 
@@ -129,6 +150,12 @@ void *handle_connection(void *socket_desc){
             }
             else if(strcmp(command, "REMACCESS") == 0){
                 handle_remaccess_command(client_socket, username, args);
+            }
+            else if(strcmp(command, "READ") == 0){
+                handle_read_command(client_socket, username, args);
+            }
+            else if(strcmp(command, "STREAM") == 0){
+                handle_stream_command(client_socket, username, args);
             }
             else{
                 // TODO: Similar stuff for all user functions

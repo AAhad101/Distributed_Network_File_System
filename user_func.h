@@ -25,6 +25,9 @@ void handle_view_command(int client_socket, const char *username, const char *ar
 */
 void handle_create_command(int client_socket, const char *username, const char *args);
 
+// Handles the "DELETE <filename>" command
+void handle_delete_command(int client_socket, const char *username, const char *args);
+
 /*
  * Handles the "ADDACCESS -[R|W] <filename> <username>" command
  * Finds the file and adds username to the appropriate permissions linked list
@@ -36,5 +39,17 @@ void handle_addaccess_command(int client_socket, const char *username, const cha
  * Finds the file and removes the username from the appropriate permissions linked list
 */
 void handle_remaccess_command(int client_socket, const char *username, const char *args);
+
+/*
+ * Handles the "READ <filename>" command
+ * Communicates directly with the SS to get the file data
+*/
+void handle_read_command(int client_socket, const char *username, const char *args);
+
+/*
+ * Handles the "STREAM <filename>" command
+ * Mostly identical in logic to READ except with added time logic for streaming delay
+*/
+void handle_stream_command(int client_socket, const char *username, const char *args);
 
 #endif

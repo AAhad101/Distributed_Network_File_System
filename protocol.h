@@ -33,6 +33,8 @@
 // Storage Server commands
 #define CMD_SS_CREATE "SS_CREATE"
 #define CMD_SS_DELETE "SS_DELETE"
+#define CMD_SS_READ "SS_READ"
+#define CMD_SS_STREAM "SS_STREAM"
 
 // Server reply messages
 #define MSG_SUCCESS "200 SUCCESS\n"

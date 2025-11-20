@@ -615,3 +615,56 @@ void handle_write_command(int client_socket, const char *username, const char *a
     pthread_mutex_unlock(&db_mutex);
     write(client_socket, response, strlen(response));
 }
+
+// Handles the "UNDO <filename>" command
+void handle_undo_command(int client_socket, const char *username, const char *args){
+    char filename[256];
+    char log_msg[LOG_BUFFER_SIZE];
+
+    // Parsing the filename
+    char clean_args[MAX_BUFFER];
+    strncpy(clean_args, args, sizeof(clean_args) - 1);
+    clean_args[sizeof(clean_args) - 1] = '\0';
+    clean_args[strcspn(clean_args, "\n")] = 0; // Strip newline
+
+    if(sscanf(clean_args, "%s", filename) != 1){
+        write(client_socket, MSG_MALFORMED, strlen(MSG_MALFORMED));
+        return;
+    }
+
+    sprintf(log_msg, "User '%s' requested UNDO for '%s'", username, filename);
+    log_event(LOG_LEVEL_INFO, log_msg);
+
+    pthread_mutex_lock(&db_mutex);
+    FileNode *node = db_find_node_internal(filename);
+
+    if(node == NULL){
+        pthread_mutex_unlock(&db_mutex);
+        write(client_socket, MSG_FILE_NOT_FOUND, strlen(MSG_FILE_NOT_FOUND));
+        return;
+    }
+
+    // Check permissions (need write access to undo)
+    if(!db_check_permission(&(node->metadata), username, 'W')){
+        pthread_mutex_unlock(&db_mutex);
+        write(client_socket, MSG_UNAUTHORIZED, strlen(MSG_UNAUTHORIZED));
+        return;
+    }
+
+    StorageServerInfo *ss = node->metadata.location;
+    if(ss == NULL){
+        pthread_mutex_unlock(&db_mutex);
+        send_error_message(client_socket, "File is offline.");
+        return;
+    }
+
+    // Update access time
+    db_update_access_time(filename, username);
+
+    // Send Redirect
+    char response[MAX_BUFFER];
+    snprintf(response, sizeof(response), "200 %s %d\n", ss->ip, ss->client_port);
+
+    pthread_mutex_unlock(&db_mutex);
+    write(client_socket, response, strlen(response));
+}

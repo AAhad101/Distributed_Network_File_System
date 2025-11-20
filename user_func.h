@@ -59,4 +59,7 @@ void handle_stream_command(int client_socket, const char *username, const char *
 */
 void handle_write_command(int client_socket, const char *username, const char *args);
 
+// Handles the "UNDO filename" command
+void handle_undo_command(int client_socket, const char *username, const char *args);
+
 #endif

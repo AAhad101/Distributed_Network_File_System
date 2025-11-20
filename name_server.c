@@ -175,6 +175,9 @@ void *handle_connection(void *socket_desc){
             else if(strcmp(command, "WRITE") == 0){
                 handle_write_command(client_socket, username, args);
             }
+            else if(strcmp(command, "UNDO") == 0){
+                handle_undo_command(client_socket, username, args);
+            }
             else{
                 // TODO: Similar stuff for all user functions
 

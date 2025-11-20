@@ -221,7 +221,27 @@ int main(int argc, char *argv[]){
 
                     // Case C: UNDO
                     else if(strcmp(ss_cmd_protocol, CMD_UNDO) == 0){
-                        // TODO: Implement UNDO logic (similar to a simple command send)
+                        char filename[256];
+                        
+                        if(sscanf(input_buffer, "%*s %s", filename) != 1){
+                            printf("ERROR: Invalid UNDO syntax. Usage: UNDO <filename>\n");
+                            close(ss_sock);
+                            continue;
+                        }
+
+                        // 1. Send "UNDO <filename>"
+                        char ss_req[MAX_BUFFER];
+                        sprintf(ss_req, "%s %s\n", CMD_UNDO, filename);
+                        printf("filename: %s\n", filename);
+                        write(ss_sock, ss_req, strlen(ss_req));
+
+                        // 2. Wait for response
+                        memset(buffer, 0, MAX_BUFFER);
+                        int n = read(ss_sock, buffer, MAX_BUFFER - 1);
+                        if(n > 0){
+                            buffer[n] = '\0';
+                            printf("%s", buffer);
+                        }
                     }
                 }
                 else{

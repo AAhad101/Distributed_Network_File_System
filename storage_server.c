@@ -32,7 +32,6 @@ typedef struct SS_FileEntry{
 // Master array to hold the in-memory representation of all files
 #define MAX_SS_FILES 1000 // Arbitrary limit for array size
 SS_FileEntry ss_file_entries[MAX_SS_FILES]; 
-static int ss_file_count = 0; // Current number of files loaded
 
 // Global variables for ftw
 static char file_list_buffer[MAX_FILE_BUFFER] = {0};
@@ -62,111 +61,142 @@ void init_locks(){
     }
 }
 
-// Reads a file, splits it into sentences, and creates the in-memory linked list
-int split_and_load_file(const char *filename, const char *filepath){
-    if(ss_file_count >= MAX_SS_FILES){
-        log_event(LOG_LEVEL_ERROR, "Cannot load file: SS file capacity reached.");
-        return -1;
+// Helper to ignore slots marked deleted
+static SS_FileEntry* find_file_entry(const char *filename){
+    for(int i = 0; i < MAX_SS_FILES; i++){
+        // Only check slots that are "in use" (have a filename)
+        if(ss_file_entries[i].filename[0] != '\0' && strcmp(ss_file_entries[i].filename, filename) == 0){
+            return &ss_file_entries[i];
+        }
     }
+    return NULL;
+}
 
+// Helper to free a sentence's linked list ---
+void free_sentence_list(SentenceNode *head) {
+    SentenceNode *curr = head;
+    while(curr){
+        SentenceNode *next = curr->next;
+        pthread_rwlock_destroy(&curr->lock); 
+        free(curr->content);
+        free(curr);
+        curr = next;
+    }
+}
+
+// Helper to clean up memory when SS_DELETE is called
+void delete_file_entry(const char *filename){
+    SS_FileEntry *entry = find_file_entry(filename);
+    if(entry){
+        // 1. Free the linked list content
+        free_sentence_list(entry->sentence_list_head);
+        entry->sentence_list_head = NULL;
+        
+        // 2. Mark slot as empty
+        entry->filename[0] = '\0'; 
+        // Note: We don't destroy the mutexes to avoid undefined behavior if threads are waiting.
+        // We just leave them initialized for the next file that claims this slot.
+    }
+}
+
+// Helper to parse file content into a linked list (used in UNDO)
+SentenceNode* parse_file_to_list(const char *filepath) {
     FILE *file = fopen(filepath, "r");
-    if(file == NULL){
-        // This is normal if ftw finds the file but it's deleted immediately after
-        log_event(LOG_LEVEL_WARN, "Could not open file during load. Skipping.");
-        return -1;
-    }
+    if(file == NULL) return NULL;
 
-    // 1. Read entire file content into a large buffer
     fseek(file, 0, SEEK_END);
     long file_size = ftell(file);
     fseek(file, 0, SEEK_SET);
 
     char *file_content = (char *)malloc(file_size + 1);
-    if(file_content == NULL){
-        perror("malloc failed (split_and_load_file)");
-        log_event(LOG_LEVEL_ERROR, "Could not load file content.");
-        exit(EXIT_FAILURE);
-    }
+    if(file_content == NULL) { fclose(file); return NULL; }
+    
     fread(file_content, 1, file_size, file);
     file_content[file_size] = '\0';
     fclose(file);
 
-    // Sentence parsing
     char delimiters[] = ".?!";
-    char *current = file_content; // Start of the current sentence segment
+    char *current = file_content;
     SentenceNode *head = NULL;
     SentenceNode *tail = NULL;
 
     while(*current != '\0'){
-        // Find the next delimiter
         char *delimiter_ptr = strpbrk(current, delimiters);
-
         size_t sentence_length;
-
+        
         if(delimiter_ptr != NULL){
-            // Find the character where the next sentence begins (skipping all spaces/newlines)
             char *start_of_next_sentence = delimiter_ptr + 1;
             while(*start_of_next_sentence != '\0' && (*start_of_next_sentence == ' ' || *start_of_next_sentence == '\t' || *start_of_next_sentence == '\n')){
                 start_of_next_sentence++;
             }
-
-            // The length of the current sentence is from 'current' up to where the next one begins
-            // This captures the delimiter and all inter-sentence spacing
             sentence_length = start_of_next_sentence - current;
         } 
         else{
-            // Last part of the file, no delimiter. Copy everything remaining.
             sentence_length = strlen(current);
         }
 
-        if(sentence_length == 0) break; // Should not happen with valid files
+        if(sentence_length == 0) break;
 
-        // 2. Create the new node and populate
         SentenceNode *new_node = (SentenceNode *)malloc(sizeof(SentenceNode));
-        if(new_node == NULL){
-            perror("malloc failed (split_and_load_file)");
-            exit(EXIT_FAILURE);
-        }
         new_node->next = NULL;
         new_node->content = (char *)malloc(sentence_length + 1);
-
-        // Copy the sentence content (including the delimiter/trailing space)
         strncpy(new_node->content, current, sentence_length);
-        new_node->content[sentence_length] = '\0'; // Manual null termination
+        new_node->content[sentence_length] = '\0';
 
-        // Initialize the sentence lock
-        if(pthread_rwlock_init(&new_node->lock, NULL) != 0){
-            perror("rwlock init failed");
-            exit(EXIT_FAILURE);
+        pthread_rwlock_init(&new_node->lock, NULL);
+
+        if(head == NULL){ 
+            head = new_node; tail = new_node; 
+        }
+        else{ 
+            tail->next = new_node; tail = new_node; 
         }
 
-        // 3. Add to the linked list
-        if(head == NULL){
-            head = new_node;
-            tail = new_node;
-        }
-        else{
-            tail->next = new_node;
-            tail = new_node;
-        }
-
-        // 4. Advance the pointer to the next segment
         current += sentence_length;
     }
 
-    // 5. Update the SS master array
-    SS_FileEntry *entry = &ss_file_entries[ss_file_count];
+    free(file_content);
+    return head;
+}
+
+// Reads a file, splits it into sentences, and creates the in-memory linked list
+int split_and_load_file(const char *filename, const char *filepath){
+    SentenceNode *head = parse_file_to_list(filepath);
+
+    // 1. Check if we already have an entry for this file (Reload scenario)
+    SS_FileEntry *entry = find_file_entry(filename);
+
+    if(entry == NULL){
+        // 2. Find a free slot (New file scenario)
+        for(int i = 0; i < MAX_SS_FILES; i++){
+            if(ss_file_entries[i].filename[0] == '\0'){
+                entry = &ss_file_entries[i];
+                // Initialize locks only once per slot lifetime if possible, 
+                // or re-init if we are unsure. pthread_mutex_init is safe to call on clean memory.
+                if(pthread_mutex_init(&entry->writer_count_mutex, NULL) != 0){
+                    log_event(LOG_LEVEL_ERROR, "Mutex init failed");
+                }
+                entry->active_writers = 0;
+                break;
+            }
+        }
+    }
+
+    if(entry == NULL){
+        log_event(LOG_LEVEL_ERROR, "SS file capacity reached.");
+        free_sentence_list(head); // Cleanup
+        return -1;
+    }
+
+    // 3. Populate the entry
+    // If reusing, free old list first (crucial for UNDO/Reload)
+    if(entry->sentence_list_head != NULL){
+        free_sentence_list(entry->sentence_list_head);
+    }
+
     strncpy(entry->filename, filename, sizeof(entry->filename) - 1);
     entry->sentence_list_head = head;
 
-    entry->active_writers = 0;
-    if(pthread_mutex_init(&entry->writer_count_mutex, NULL) != 0){
-        log_event(LOG_LEVEL_ERROR, "Mutex init failed");
-    }
-
-    ss_file_count++;
-
-    free(file_content); // Free the large temporary buffer
     return 0;
 }
 
@@ -265,6 +295,7 @@ void *ss_handle_nm_command(void *socket_desc){
 
         // Delete the file from the filesystem
         if(remove(file_path) == 0){
+            delete_file_entry(filename);
             write(nm_socket, MSG_SUCCESS, strlen(MSG_SUCCESS));
         }
         else{
@@ -350,16 +381,6 @@ void *ss_listen_for_nm(void *port_arg){
         }
         pthread_detach(thread_id);
     }
-}
-
-// Global helper to find the SS_FileEntry by filename
-static SS_FileEntry* find_file_entry(const char *filename){
-    for(int i = 0; i < ss_file_count; i++){
-        if(strcmp(ss_file_entries[i].filename, filename) == 0){
-            return &ss_file_entries[i];
-        }
-    }
-    return NULL;
 }
 
 // Helper to calculate stats from memoruy
@@ -788,7 +809,50 @@ void *ss_handle_client_connection(void *socket_desc){
 
     // UNDO logic
     else if(strcmp(command, CMD_UNDO) == 0){
+        // 1. Get file lock (write lock for exclusive access)
+        // We need exclusive access because we are swapping the entire file content
+        int lock_idx = get_lock_index(filename);
+        pthread_rwlock_wrlock(&file_locks[lock_idx]);
 
+        SS_FileEntry *entry = find_file_entry(filename);
+        if(!entry){
+            write(client_socket, MSG_FILE_NOT_FOUND, strlen(MSG_FILE_NOT_FOUND));
+            pthread_rwlock_unlock(&file_locks[lock_idx]);
+            close(client_socket);
+            pthread_exit(NULL);
+        }
+
+        // 2. Check if .undo file exists
+        char original_path[2048];
+        char undo_path[2048];
+        snprintf(original_path, sizeof(original_path), "%s/%s", global_storage_path, filename);
+        snprintf(undo_path, sizeof(undo_path), "%s/%s.undo", global_storage_path, filename);
+
+        if(access(undo_path, F_OK) != -1){
+            char log_msg[MAX_BUFFER];
+            sprintf(log_msg, "Executing UNDO for: %s", filename);
+            log_event(LOG_LEVEL_INFO, log_msg);
+
+            // 3. Perform the swap
+            remove(original_path);           // Delete current
+            rename(undo_path, original_path); // Move undo -> current
+            
+            // 4. Update Memory
+            split_and_load_file(filename, original_path); // This will find the existing entry and replace the list head
+            remove(undo_path);  // Delete the undo backup            
+
+            // 5. Notify NM (Update metadata stats)
+            notify_nm_update(filename);
+
+            write(client_socket, MSG_SUCCESS, strlen(MSG_SUCCESS));
+        }
+        else{
+            log_event(LOG_LEVEL_WARN, "Undo failed: No backup found.");
+            write(client_socket, MSG_NO_UNDO_RECORD, strlen(MSG_NO_UNDO_RECORD));
+        }
+
+        // 6. Unlock
+        pthread_rwlock_unlock(&file_locks[lock_idx]);
     }
 
     // READ and STREAM logic

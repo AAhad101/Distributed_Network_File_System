@@ -66,6 +66,21 @@ void *handle_connection(void *socket_desc){
             is_client = 0;
         }
         
+        // Updating files metadata
+        else if(strncmp(buffer, CMD_SS_UPDATE_META, strlen(CMD_SS_UPDATE_META)) == 0){
+            // Format: SS_UPDATE_META <filename> <size> <words> <chars>
+            char filename[256];
+            size_t size, words, chars;
+
+            if(sscanf(buffer, "%*s %s %lu %lu %lu", filename, &size, &words, &chars) == 4) {
+                db_update_file_stats(filename, size, words, chars);
+                log_event(LOG_LEVEL_INFO, "Received metadata update from SS.");
+            } else {
+                log_event(LOG_LEVEL_ERROR, "Malformed metadata update from SS.");
+            }
+            // No response needed, but closing socket happens at end of thread
+        }
+
         // Invalid sender (or wrong handshake)
         else{
             sprintf(log_msg, "Unknown connection attempt: %s", buffer);
@@ -156,6 +171,9 @@ void *handle_connection(void *socket_desc){
             }
             else if(strcmp(command, "STREAM") == 0){
                 handle_stream_command(client_socket, username, args);
+            }
+            else if(strcmp(command, "WRITE") == 0){
+                handle_write_command(client_socket, username, args);
             }
             else{
                 // TODO: Similar stuff for all user functions

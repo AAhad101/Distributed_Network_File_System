@@ -913,3 +913,24 @@ int db_update_access_time(const char *filename, const char *username){
     db_save_to_disk_locked();
     return 0;
 }
+
+// Updates file stats (Called when SS reports a change)
+int db_update_file_stats(const char *filename, size_t size, size_t words, size_t chars){
+    pthread_mutex_lock(&db_mutex);
+
+    FileNode *node = db_find_node_internal(filename);
+    if(node == NULL){
+        pthread_mutex_unlock(&db_mutex);
+        return 404;
+    }
+
+    node->metadata.size = size;
+    node->metadata.word_count = words;
+    node->metadata.char_count = chars;
+    node->metadata.time_last_modified = time(NULL); // Update modified time
+
+    db_save_to_disk_locked(); // Persist changes
+
+    pthread_mutex_unlock(&db_mutex);
+    return 0;
+}

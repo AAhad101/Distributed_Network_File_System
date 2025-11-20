@@ -561,5 +561,57 @@ void handle_stream_command(int client_socket, const char *username, const char *
 
     // Send the IP/Port to the client
     write(client_socket, response, strlen(response));
+}
 
+/*
+ * Handles the "WRITE <filename> <sentence_index>" command
+ * Validates user and redirects to SS
+*/
+void handle_write_command(int client_socket, const char *username, const char *args){
+    char filename[256];
+    int sentence_idx;
+
+    // Parse "filename sentence_idx"
+    if(sscanf(args, "%s %d", filename, &sentence_idx) != 2){
+        write(client_socket, MSG_MALFORMED, strlen(MSG_MALFORMED));
+        return;
+    }
+
+    char log_msg[LOG_BUFFER_SIZE];
+    snprintf(log_msg, sizeof(log_msg), "User '%s' requested WRITE on '%s' at index %d", username, filename, sentence_idx);
+    log_event(LOG_LEVEL_INFO, log_msg);
+
+    pthread_mutex_lock(&db_mutex);
+    FileNode *node = db_find_node_internal(filename);
+
+    if(node == NULL){
+        pthread_mutex_unlock(&db_mutex);
+        write(client_socket, MSG_FILE_NOT_FOUND, strlen(MSG_FILE_NOT_FOUND));
+        return;
+    }
+
+    // Check Write Permission
+    if(!db_check_permission(&(node->metadata), username, 'W')){
+        pthread_mutex_unlock(&db_mutex);
+        write(client_socket, MSG_UNAUTHORIZED, strlen(MSG_UNAUTHORIZED));
+        return;
+    }
+
+    StorageServerInfo *ss = node->metadata.location;
+    if(ss == NULL){
+        pthread_mutex_unlock(&db_mutex);
+        send_error_message(client_socket, "File is offline.");
+        return;
+    }
+
+    // Update last access time and user ---
+    // Even though the write happens on SS, the request counts as an access
+    db_update_access_time(filename, username);
+
+    // Send Redirect: "200 <IP> <Client_Port>"
+    char response[MAX_BUFFER];
+    snprintf(response, sizeof(response), "200 %s %d\n", ss->ip, ss->client_port);
+
+    pthread_mutex_unlock(&db_mutex);
+    write(client_socket, response, strlen(response));
 }

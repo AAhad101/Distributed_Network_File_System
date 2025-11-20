@@ -52,4 +52,11 @@ void handle_read_command(int client_socket, const char *username, const char *ar
 */
 void handle_stream_command(int client_socket, const char *username, const char *args);
 
+
+/*
+ * Handles the "WRITE <filename> <sentence_index>" command
+ * Validates user and redirects to SS
+*/
+void handle_write_command(int client_socket, const char *username, const char *args);
+
 #endif

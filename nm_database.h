@@ -121,7 +121,11 @@ int db_remove_permission(const char *filename, const char *requestor, const char
 */
 int db_update_access_time(const char* filename, const char* username);
 
+// Updates file stats (Called when SS reports a change)
+int db_update_file_stats(const char *filename, size_t size, size_t words, size_t chars);
+
 #endif
+
 
 
 

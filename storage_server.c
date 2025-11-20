@@ -25,6 +25,8 @@ typedef struct SentenceNode{
 typedef struct SS_FileEntry{
     char filename[256];
     SentenceNode *sentence_list_head; // Head of the linked list of sentences
+    int active_writers;
+    pthread_mutex_t writer_count_mutex;
 } SS_FileEntry;
 
 // Master array to hold the in-memory representation of all files
@@ -156,6 +158,12 @@ int split_and_load_file(const char *filename, const char *filepath){
     SS_FileEntry *entry = &ss_file_entries[ss_file_count];
     strncpy(entry->filename, filename, sizeof(entry->filename) - 1);
     entry->sentence_list_head = head;
+
+    entry->active_writers = 0;
+    if(pthread_mutex_init(&entry->writer_count_mutex, NULL) != 0){
+        log_event(LOG_LEVEL_ERROR, "Mutex init failed");
+    }
+
     ss_file_count++;
 
     free(file_content); // Free the large temporary buffer
@@ -233,7 +241,19 @@ void *ss_handle_nm_command(void *socket_desc){
         }
         else{
             close(fd);
-            write(nm_socket, MSG_SUCCESS, strlen(MSG_SUCCESS));
+
+            // Load the new empty file into memory so find_file_entry can see it later
+            if(split_and_load_file(filename, file_path) == 0){
+                log_event(LOG_LEVEL_INFO, "New file loaded into memory.");
+                write(nm_socket, MSG_SUCCESS, strlen(MSG_SUCCESS));
+            }
+            else{
+                log_event(LOG_LEVEL_ERROR, "Failed to load new file into memory.");
+                // Technically the file exists on disk now, but SS can't manage it.
+                // You might want to delete it or send an error. 
+                // For now, let's send Success if disk write worked, but log the error.
+                write(nm_socket, MSG_SUCCESS, strlen(MSG_SUCCESS)); 
+            }
         }
     }
     else if(strcmp(command, CMD_SS_DELETE) == 0){
@@ -342,11 +362,256 @@ static SS_FileEntry* find_file_entry(const char *filename){
     return NULL;
 }
 
+// Helper to calculate stats from memoruy
+void calculate_stats(SS_FileEntry *entry, size_t *size, size_t *words, size_t *chars){
+    *size = 0;
+    *words = 0;
+    *chars = 0;
+
+    SentenceNode *curr = entry->sentence_list_head;
+    while(curr != NULL){
+        size_t len = strlen(curr->content);
+        *size += len;
+        *chars += len; // Simplifying char count = byte size for ASCII
+
+        // Count words in this sentence
+        int in_word = 0;
+        for(int i = 0; i < len; i++){
+            if(curr->content[i] != ' ' && curr->content[i] != '\t' && curr->content[i] != '\n'){
+                if(!in_word){
+                    *words += 1;
+                    in_word = 1;
+                }
+            } 
+            else{
+                in_word = 0;
+            }
+        }
+        curr = curr->next;
+    }
+}
+
+// Helper to notify NM of metadata update
+void notify_nm_update(const char *filename){
+    // 1. Find entry and calculate stats
+    SS_FileEntry *entry = find_file_entry(filename);
+    if(!entry){
+        char err_msg[200];
+        snprintf(err_msg, sizeof(err_msg), "Notify NM Failed: Could not find '%s' in memory.", filename);
+        log_event(LOG_LEVEL_ERROR, err_msg);
+        return;
+    }
+
+    size_t size, words, chars;
+    calculate_stats(entry, &size, &words, &chars);
+
+    // 2. Connect to NM
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if(sock < 0){
+        perror("Notify NM socket failed");
+        return;
+    }
+
+    struct sockaddr_in nm_addr;
+    memset(&nm_addr, 0, sizeof(nm_addr));
+    nm_addr.sin_family = AF_INET;
+    nm_addr.sin_port = htons(NM_PORT);
+    inet_pton(AF_INET, NM_IP, &nm_addr.sin_addr);
+
+    if(connect(sock, (struct sockaddr*)&nm_addr, sizeof(nm_addr)) == 0){
+        char buffer[MAX_BUFFER];
+        // Format: SS_UPDATE_META <filename> <size> <words> <chars>
+        sprintf(buffer, "%s %s %lu %lu %lu\n", CMD_SS_UPDATE_META, filename, size, words, chars);
+        
+        if(write(sock, buffer, strlen(buffer)) < 0){
+            perror("Notify NM write failed");
+        }
+        else{
+            log_event(LOG_LEVEL_INFO, "Sent metadata update to NM.");
+        }
+        
+        // We don't really need to wait for a response, it's a notification
+    }
+    else{ 
+        perror("Notify NM connect failed"); 
+        log_event(LOG_LEVEL_ERROR, "Failed to send updated metadata to NM.");
+    }
+    close(sock);
+}
+
+// Helper to check if string ends with a delimiter (ignoring trailing space)
+int ends_with_delimiter(char *str){
+    if(!str || strlen(str) == 0) return 0;
+    int len = strlen(str);
+    for(int i = len - 1; i >= 0; i--){
+        if(str[i] != ' ' && str[i] != '\t' && str[i] != '\n'){
+            return (str[i] == '.' || str[i] == '?' || str[i] == '!');
+        }
+    }
+    return 0; // No delimiter found
+}
+
+/*
+ * Helper to insert text given a word index
+ * Returns a new allocated string with the result, caller must free the old one
+*/
+char* insert_text_at_index(char *original, int word_idx, char *text_to_add){
+    int orig_len = strlen(original);
+    int add_len = strlen(text_to_add);
+    char *new_str = malloc(orig_len + add_len + 2); // +2 for space and null
+    if(!new_str) return NULL;
+
+    int current_word = 0; // 0-indexed word count logic for pointer math
+    char *ptr = original;
+    char *insert_pos = original + orig_len; // Default: Append to end
+
+    // Case 1: Inserting at the start (word_idx 0 or 1)
+    if(word_idx <= 0){
+        sprintf(new_str, "%s %s", text_to_add, original);
+        return new_str;
+    }
+
+    int in_word = 0;
+
+    // Scan to find the insertion point based on word count
+    while(*ptr){
+        // Check if current char is part of a word
+        if(*ptr != ' ' && *ptr != '\t' && *ptr != '\n'){
+            if(!in_word){
+                // Start of a new word
+                if(current_word == word_idx){
+                    insert_pos = ptr;
+                    break; // Found the spot
+                }
+                current_word++;
+                in_word = 1;
+            }
+        } 
+        else{
+            in_word = 0;
+        }
+        ptr++;
+    }
+
+    // Case 2: Appending to the end (Index >= total words)
+    if(insert_pos == NULL){
+        // If original is empty, just return the new text
+        if(orig_len == 0){
+            strcpy(new_str, text_to_add);
+        } 
+        else{
+            // Otherwise append with a space
+            sprintf(new_str, "%s %s", original, text_to_add);
+        }
+        return new_str;
+    }
+
+    // Case 3: Inserting in the middle
+    int prefix_len = insert_pos - original;
+    strncpy(new_str, original, prefix_len);
+    new_str[prefix_len] = '\0';
+    
+    strcat(new_str, text_to_add);
+    strcat(new_str, " "); // Add space after the new text
+    strcat(new_str, insert_pos); // Add the rest of the original string
+
+    return new_str;
+}
+
+// Helper to copy file for backup
+void create_backup(const char *filename){
+    char src[2048], dest[2048];
+    snprintf(src, sizeof(src), "%s/%s", global_storage_path, filename);
+    snprintf(dest, sizeof(dest), "%s/%s.undo", global_storage_path, filename);
+    
+    FILE *fsrc = fopen(src, "r");
+    FILE *fdest = fopen(dest, "w");
+    if(fsrc && fdest){
+        char buf[4096];
+        size_t n;
+        while((n = fread(buf, 1, sizeof(buf), fsrc)) > 0) fwrite(buf, 1, n, fdest);
+    }
+    if(fsrc) fclose(fsrc);
+    if(fdest) fclose(fdest);
+}
+
+// Helper that accepts an ignored_node to prevent self_deadlock
+void save_memory_to_disk(SS_FileEntry *entry){
+    char file_path[2048];
+    snprintf(file_path, sizeof(file_path), "%s/%s", global_storage_path, entry->filename);
+    FILE *file = fopen(file_path, "w");
+    if(!file) return;
+
+    SentenceNode *curr = entry->sentence_list_head;
+    while(curr){
+        // Acquire Read Lock on node to ensure content is stable
+        pthread_rwlock_rdlock(&curr->lock);
+        
+        if(curr->content){
+            fwrite(curr->content, 1, strlen(curr->content), file);
+        }
+        
+        pthread_rwlock_unlock(&curr->lock);
+        curr = curr->next;
+    }
+    fclose(file);
+}
+
+// Helper to parse and split nodes (the "Reflow" Logic)
+void reflow_sentence_node(SentenceNode *node){
+    // 1. Check if the content has internal delimiters
+    char delimiters[] = ".?!";
+    char *content_copy = strdup(node->content);
+    char *ptr = content_copy;
+    char *delimiter_ptr = strpbrk(ptr, delimiters);
+
+    // If no delimiter or delimiter is at the very end, no split needed
+    if(!delimiter_ptr || *(delimiter_ptr + 1) == '\0'){
+        free(content_copy);
+        return;
+    }
+
+    // 2. We found a split point
+    // Find where the FIRST sentence ends (including delimiter and trailing space)
+    char *next_sent_start = delimiter_ptr + 1;
+    while(*next_sent_start == ' ' || *next_sent_start == '\t') next_sent_start++;
+
+    // Calculate length of the first part
+    int len1 = next_sent_start - ptr;
+
+    // Create new content for CURRENT node
+    char *new_content1 = malloc(len1 + 1);
+    strncpy(new_content1, ptr, len1);
+    new_content1[len1] = '\0';
+
+    // Create content for NEW node (the rest of the string)
+    char *rest_content = strdup(next_sent_start);
+
+    // Update current node
+    free(node->content);
+    node->content = new_content1;
+
+    // Create new node
+    SentenceNode *new_node = malloc(sizeof(SentenceNode));
+    pthread_rwlock_init(&new_node->lock, NULL);
+    new_node->content = rest_content;
+
+    // Link: Current -> New -> Old_Next
+    new_node->next = node->next;
+    node->next = new_node;
+
+    free(content_copy);
+
+    // Recursively check the new node (in case it also needs splitting)
+    reflow_sentence_node(new_node);
+}
+
 void *ss_handle_client_connection(void *socket_desc){
     int client_socket = *(int *)socket_desc;
     free(socket_desc);
-    
     char buffer[MAX_BUFFER];
+
+    // 1. Read command
     int bytes_read = read(client_socket, buffer, MAX_BUFFER - 1);
 
     if(bytes_read <= 0){
@@ -357,10 +622,177 @@ void *ss_handle_client_connection(void *socket_desc){
     buffer[bytes_read] = '\0';
     buffer[strcspn(buffer, "\n")] = 0; // Strip newline
 
+    char input_copy[MAX_BUFFER];
+    strncpy(input_copy, buffer, MAX_BUFFER); // Save for parsing
+    
     char *command = strtok(buffer, " ");
     char *filename = strtok(NULL, " ");
 
-    if(command && (strcmp(command, CMD_SS_READ) == 0 || strcmp(command, CMD_SS_STREAM) == 0) && filename){
+    // WRITE logic
+    if(command && strcmp(command, CMD_WRITE) == 0 && filename){
+        char *idx_str = strtok(NULL, " ");
+        if(!idx_str){
+            log_event(LOG_LEVEL_ERROR, "WRITE command missing sentence index.");
+            write(client_socket, MSG_MALFORMED, strlen(MSG_MALFORMED));
+                        
+            close(client_socket);
+            pthread_exit(NULL);
+        }
+        int sentence_idx = atoi(idx_str);
+
+        // 1. File lock (read lock - prevents DELETE)
+        int lock_idx = get_lock_index(filename);
+        pthread_rwlock_rdlock(&file_locks[lock_idx]);
+
+        SS_FileEntry *entry = find_file_entry(filename);
+        if(!entry){
+            write(client_socket, MSG_FILE_NOT_FOUND, strlen(MSG_FILE_NOT_FOUND));
+            pthread_rwlock_unlock(&file_locks[lock_idx]);
+            close(client_socket);
+            pthread_exit(NULL);
+        }
+
+        // Increment writer count
+        pthread_mutex_lock(&entry->writer_count_mutex);
+        entry->active_writers++;
+        pthread_mutex_unlock(&entry->writer_count_mutex);
+
+        // 2. Traverse to find node and validate
+        SentenceNode *curr = entry->sentence_list_head;
+        SentenceNode *prev = NULL;
+        int count = 1;
+
+        while(curr != NULL && count < sentence_idx){
+            prev = curr;
+            curr = curr->next;
+            count++;
+        }
+
+        // Rule: Cannot write to sentence N if N-1 is incomplete (i.e. has no delimiter)
+        if(sentence_idx > 0 && prev != NULL){
+            pthread_rwlock_rdlock(&prev->lock);
+            if(!ends_with_delimiter(prev->content)){
+                pthread_rwlock_unlock(&prev->lock);
+                pthread_rwlock_unlock(&file_locks[lock_idx]);
+
+                // Dcrement writer count before exit
+                pthread_mutex_lock(&entry->writer_count_mutex);
+                entry->active_writers--;
+                pthread_mutex_unlock(&entry->writer_count_mutex);
+
+                write(client_socket, MSG_PREVIOUS_SENTENCE_INCOMPLETE, strlen(MSG_PREVIOUS_SENTENCE_INCOMPLETE));
+                close(client_socket);
+                pthread_exit(NULL);
+            }
+            pthread_rwlock_unlock(&prev->lock);
+        }
+
+        // If appending a new sentence at the end (count == sentence_idx)
+        if(curr == NULL && count == sentence_idx){
+            // Create a new empty node to write into
+            SentenceNode *new_tail = (SentenceNode *)malloc(sizeof(SentenceNode));
+            pthread_rwlock_init(&new_tail->lock, NULL);
+            new_tail->content = strdup(""); // Empty start
+            new_tail->next = NULL;
+             
+            if(prev) prev->next = new_tail;
+            else entry->sentence_list_head = new_tail; // First sentence
+             
+            curr = new_tail;
+        }
+        else if(curr == NULL){
+            // Decrement writer count before exit
+            pthread_mutex_lock(&entry->writer_count_mutex);
+            entry->active_writers--;
+            pthread_mutex_unlock(&entry->writer_count_mutex);
+            
+            write(client_socket, MSG_INVALID_INDEX, strlen(MSG_INVALID_INDEX));
+            pthread_rwlock_unlock(&file_locks[lock_idx]);
+            close(client_socket);
+            pthread_exit(NULL);
+        }
+
+        // 3. Acquire sentence write lock
+        if(pthread_rwlock_trywrlock(&curr->lock) != 0){
+            // Lock failed! We must decrement the count before leaving.
+            pthread_mutex_lock(&entry->writer_count_mutex);
+            entry->active_writers--;
+            pthread_mutex_unlock(&entry->writer_count_mutex);
+            
+            write(client_socket, MSG_SENTENCE_LOCKED, strlen(MSG_SENTENCE_LOCKED));
+            pthread_rwlock_unlock(&file_locks[lock_idx]);
+            close(client_socket);
+            pthread_exit(NULL);
+        }
+
+        // 4. Create UNDO backup
+        char *filename_copy = (char *)malloc(strlen(filename) + 1);
+        strcpy(filename_copy, filename);
+        create_backup(filename_copy); 
+
+        // 5. Send ready
+        write(client_socket, "200 READY\n", 10);
+
+        // 6. Transaction loop
+        while(1){
+            memset(buffer, 0, MAX_BUFFER);
+            int n = read(client_socket, buffer, MAX_BUFFER - 1);
+            if(n <= 0) break;
+            buffer[n] = '\0';
+            buffer[strcspn(buffer, "\n")] = 0;
+
+            if(strncmp(buffer, CMD_ETIRW, 5) == 0) break;
+
+            // Parse "word_idx text"
+            int w_idx;
+            //char text[MAX_BUFFER];
+            char *tok = strtok(buffer, " ");
+            if(tok){
+                w_idx = atoi(tok);
+                char *content_part = strtok(NULL, ""); // Get rest
+                if(content_part){
+                    // Modify content
+                    char *updated = insert_text_at_index(curr->content, w_idx, content_part);
+                    free(curr->content);
+                    curr->content = updated;
+                }
+            }
+        }
+
+        // 7. Post-WRITE: Check for splitting (Reflow)
+        reflow_sentence_node(curr);
+
+        // 8. Unlock the sentence first
+        pthread_rwlock_unlock(&curr->lock);
+
+        int should_save = 0;
+        pthread_mutex_lock(&entry->writer_count_mutex);
+        entry->active_writers--;
+        if(entry->active_writers == 0){
+            should_save = 1;
+        }
+        pthread_mutex_unlock(&entry->writer_count_mutex);
+
+        // 9. Conditional Save
+        if(should_save){
+            save_memory_to_disk(entry);
+            notify_nm_update(filename_copy); // Only notify if we actually saved
+        }
+
+        // 10. Unlock File
+        pthread_rwlock_unlock(&file_locks[lock_idx]);
+
+        // 11. Notify client
+        write(client_socket, MSG_SUCCESS, strlen(MSG_SUCCESS));
+    }
+
+    // UNDO logic
+    else if(strcmp(command, CMD_UNDO) == 0){
+
+    }
+
+    // READ and STREAM logic
+    else if(command && (strcmp(command, CMD_SS_READ) == 0 || strcmp(command, CMD_SS_STREAM) == 0) && filename){
         int is_stream = (strcmp(command, CMD_SS_STREAM) == 0);
 
         // 1. Get lock index and acquire file-level read lock
@@ -492,6 +924,26 @@ void *ss_listen_for_clients(void *port_arg){
     }
 }
 
+// Debugging function to check contents of the linked list
+void debug_print_structure(const char *filename){
+    SS_FileEntry *entry = find_file_entry(filename);
+    if(!entry){
+        printf("Debug: File '%s' not found in memory.\n", filename);
+        return;
+    }
+
+    printf("\n=== DEBUG STRUCTURE for '%s' ===\n", filename);
+    SentenceNode *curr = entry->sentence_list_head;
+    int i = 1;
+    while(curr != NULL){
+        // We use brackets [] to visualize trailing spaces
+        printf("Node %d: [%s]\n", i, curr->content);
+        curr = curr->next;
+        i++;
+    }
+    printf("================================\n");
+}
+
 
 int main(int argc, char *argv[]){
     // 0. Initialising logging
@@ -538,6 +990,9 @@ int main(int argc, char *argv[]){
 
     sprintf(log_msg, "Found and loaded files: %s", file_list_buffer);
     log_event(LOG_LEVEL_INFO, log_msg);
+
+    ///////DEBUG///////
+    //debug_print_structure("testfile.txt");
 
     // Socket and connect stuff starts here
     int sock = 0;

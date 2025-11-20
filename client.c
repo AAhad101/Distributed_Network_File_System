@@ -79,8 +79,36 @@ int main(int argc, char *argv[]){
                     break;
                 }
 
+                // Parse the command token (e.g., "READ", "WRITE", "EXEC")
+                char original_command[100];
+                // Use a copy to avoid corrupting input_buffer
+                char parse_copy[MAX_BUFFER];
+                strncpy(parse_copy, input_buffer, MAX_BUFFER);
+                sscanf(parse_copy, "%s", original_command);
+
+                // Determine if Redirect is Expected (READ/STREAM/WRITE/UNDO)
+                int is_redirect_expected = 0;
+                char *ss_cmd_protocol = CMD_SS_READ; // Default
+
+                if(strcmp(original_command, "READ") == 0){
+                    is_redirect_expected = 1;
+                    ss_cmd_protocol = CMD_SS_READ;
+                }
+                else if(strcmp(original_command, "STREAM") == 0){
+                    is_redirect_expected = 1;
+                    ss_cmd_protocol = CMD_SS_STREAM;
+                }
+                else if(strcmp(original_command, "WRITE") == 0){
+                    is_redirect_expected = 1;
+                    ss_cmd_protocol = CMD_WRITE;
+                }
+                else if(strcmp(original_command, "UNDO") == 0){
+                    is_redirect_expected = 1;
+                    ss_cmd_protocol = CMD_UNDO;
+                }
+
                 // Send the command to the server
-                if(write(sock, input_buffer, strlen(buffer)) < 0){
+                if(write(sock, input_buffer, strlen(input_buffer)) < 0){
                     perror("write to server failed");
                     break;
                 }
@@ -99,69 +127,102 @@ int main(int argc, char *argv[]){
                 char ss_ip[16];
                 int ss_port;
 
-                // Check if response is a READ redirect ("200 <IP> <Port>")
-                if(strncmp(buffer, "200", 3) == 0 && sscanf(buffer, "200 %s %d", ss_ip, &ss_port) == 2){
-                    // 1. Get filename and original command from saved input_buffer
-                    char filename[256];
-                    char original_command[100];
-
-                    // Parse the command and filename from the saved input
-                    if(sscanf(input_buffer, "%s %s", original_command, filename) != 2){
-                        printf("ERROR: Internal client error during command parsing.\n");
-                        continue;
-                    }
-
-                    // 2. Determine the correct SS protocol command
-                    char *ss_cmd_protocol;
-                    if(strcmp(original_command, "STREAM") == 0){
-                        ss_cmd_protocol = CMD_SS_STREAM;
-                    } 
-                    else{
-                        // TODO: Should add different else if's for UNDO, WRITE and EXEC I guess
-                        // Default to READ (covers the regular READ command)
-                        ss_cmd_protocol = CMD_SS_READ; 
-                    }
-
-                    printf("Initiating file download from %s:%d...\n", ss_ip, ss_port);
-                    
-                    // 3. Create new socket for SS
+                // Check if response is a redirect ("200 <IP> <Port>") AND we expected one
+                if(is_redirect_expected && strncmp(buffer, "200", 3) == 0 && sscanf(buffer, "200 %s %d", ss_ip, &ss_port) == 2){
+                    // 1. Create new socket for SS
                     int ss_sock = socket(AF_INET, SOCK_STREAM, 0);
                     struct sockaddr_in ss_addr;
-
                     memset(&ss_addr, 0, sizeof(ss_addr));
                     ss_addr.sin_family = AF_INET;
                     ss_addr.sin_port = htons(ss_port);
-
                     if(inet_pton(AF_INET, ss_ip, &ss_addr.sin_addr) <= 0){
                         printf("ERROR: Invalid SS IP.\n");
                         close(ss_sock);
                         continue;
                     }
 
-                    // 4. Connect to SS
+                    // 2. Connect to SS
                     if(connect(ss_sock, (struct sockaddr*)&ss_addr, sizeof(ss_addr)) < 0){
                         printf("ERROR: Failed to connect to Storage Server.\n");
                         close(ss_sock);
                         continue;
                     }
 
-                    // 5. Send Request: "<CMD_SS_X> <filename>"
-                    char ss_req[MAX_BUFFER];
-                    sprintf(ss_req, "%s %s\n", ss_cmd_protocol, filename);
-                    write(ss_sock, ss_req, strlen(ss_req));
+                    // 3. Handle protocol specific logic
 
-                    // 6. Stream Data from SS
-                    char file_chunk[4096];
-                    int n_read;
+                    // Case A: READ or STREAM
+                    if(strcmp(ss_cmd_protocol, CMD_SS_READ) == 0 || strcmp(ss_cmd_protocol, CMD_SS_STREAM) == 0){
+                        printf("Initiating file download from %s:%d...\n", ss_ip, ss_port);
+                        
+                        char filename[256];
+                        sscanf(input_buffer, "%*s %s", filename); // Skip command, get filename
+                        filename[strcspn(filename, "\n")] = 0;
 
-                    while((n_read = read(ss_sock, file_chunk, sizeof(file_chunk)-1)) > 0){
-                        file_chunk[n_read] = '\0';
-                        printf("%s", file_chunk);
+                        char ss_req[MAX_BUFFER];
+                        sprintf(ss_req, "%s %s\n", ss_cmd_protocol, filename);
+                        write(ss_sock, ss_req, strlen(ss_req));
 
-                        fflush(stdout);
+                        char file_chunk[4096];
+                        int n_read;
+                        while((n_read = read(ss_sock, file_chunk, sizeof(file_chunk)-1)) > 0){
+                            file_chunk[n_read] = '\0';
+                            printf("%s", file_chunk);
+                            fflush(stdout); // Crucial for STREAM delay visibility
+                        }
+
+                        printf("\n");
                     }
 
-                    close(ss_sock);
+                    // Case B: WRITE
+                    else if(strcmp(ss_cmd_protocol, CMD_WRITE) == 0){
+                        char filename[256];
+                        int s_idx;
+
+                        // Parse "WRITE filename index"
+                        if(sscanf(input_buffer, "%*s %s %d", filename, &s_idx) != 2){
+                            printf("ERROR: Invalid WRITE syntax. Usage: WRITE <filename> <sentence_index>\n");
+                            close(ss_sock);
+                            continue;
+                        }
+
+                        // Send initial WRITE command to SS
+                        char ss_req[MAX_BUFFER];
+                        sprintf(ss_req, "%s %s %d\n", CMD_WRITE, filename, s_idx);
+                        write(ss_sock, ss_req, strlen(ss_req));
+
+                        // Wait for "200 READY"
+                        memset(buffer, 0, MAX_BUFFER);
+                        read(ss_sock, buffer, MAX_BUFFER);
+
+                        if(strncmp(buffer, "200", 3) == 0){
+                            printf("%s", buffer);
+                            printf("Write mode enabled. Enter '<word_idx> <text>'. Type 'ETIRW' to finish.\n");
+
+                            while(1){
+                                printf(">> ");
+                                memset(input_buffer, 0, MAX_BUFFER);
+                                if(fgets(input_buffer, MAX_BUFFER, stdin) == NULL) break;
+                                
+                                // Send line to SS
+                                write(ss_sock, input_buffer, strlen(input_buffer));
+                                
+                                if(strncmp(input_buffer, "ETIRW", 5) == 0) break;
+                            }
+
+                            // Wait for final success/failure from SS
+                            memset(buffer, 0, MAX_BUFFER);
+                            read(ss_sock, buffer, MAX_BUFFER);
+                            printf("%s", buffer);
+                        }
+                        else{
+                            printf("Server refused WRITE: %s", buffer);
+                        }
+                    }
+
+                    // Case C: UNDO
+                    else if(strcmp(ss_cmd_protocol, CMD_UNDO) == 0){
+                        // TODO: Implement UNDO logic (similar to a simple command send)
+                    }
                 }
                 else{
                     // For LIST, INFO, or Error messages (404, 401) from NM

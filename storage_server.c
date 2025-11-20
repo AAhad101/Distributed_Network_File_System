@@ -254,6 +254,9 @@ void *ss_handle_nm_command(void *socket_desc){
         pthread_exit(NULL);
     }
 
+    // Get lock index
+    int lock_idx = get_lock_index(filename);
+
     // Handle SS_CREATE
     if(strcmp(command, CMD_SS_CREATE) == 0){
         char file_path[2048];
@@ -261,6 +264,9 @@ void *ss_handle_nm_command(void *socket_desc){
 
         sprintf(log_msg, "Executing CREATE for: %s", file_path);
         log_event(LOG_LEVEL_INFO, log_msg);
+
+        // Acquire file write lock (exclusive) ---
+        pthread_rwlock_wrlock(&file_locks[lock_idx]);
 
         // Create the empty file
         int fd = open(file_path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
@@ -285,6 +291,9 @@ void *ss_handle_nm_command(void *socket_desc){
                 write(nm_socket, MSG_SUCCESS, strlen(MSG_SUCCESS)); 
             }
         }
+
+        // Release file lock
+        pthread_rwlock_unlock(&file_locks[lock_idx]);
     }
     else if(strcmp(command, CMD_SS_DELETE) == 0){
         char file_path[2048];
@@ -292,6 +301,9 @@ void *ss_handle_nm_command(void *socket_desc){
 
         sprintf(log_msg, "Executing DELETE for: %s", file_path);
         log_event(LOG_LEVEL_INFO, log_msg);
+
+        // Acquire file write lock (exclusive access of file)
+        pthread_rwlock_wrlock(&file_locks[lock_idx]);
 
         // Delete the file from the filesystem
         if(remove(file_path) == 0){
@@ -303,6 +315,9 @@ void *ss_handle_nm_command(void *socket_desc){
             log_event(LOG_LEVEL_ERROR, "Failed to delete file locally.");
             write(nm_socket, MSG_CANNOT_DELETE_FILE, strlen(MSG_CANNOT_DELETE_FILE));
         }
+
+        // Release file lock
+        pthread_rwlock_unlock(&file_locks[lock_idx]);
     }
     else{
         log_event(LOG_LEVEL_WARN, "Unknown command from NM.");

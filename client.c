@@ -262,7 +262,6 @@ int main(int argc, char *argv[]){
                         // 1. Send "UNDO <filename>"
                         char ss_req[MAX_BUFFER];
                         sprintf(ss_req, "%s %s\n", CMD_UNDO, filename);
-                        printf("filename: %s\n", filename);
                         write(ss_sock, ss_req, strlen(ss_req));
 
                         // 2. Wait for response

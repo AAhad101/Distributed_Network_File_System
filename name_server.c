@@ -178,6 +178,9 @@ void *handle_connection(void *socket_desc){
             else if(strcmp(command, "UNDO") == 0){
                 handle_undo_command(client_socket, username, args);
             }
+            else if(strcmp(command, "EXEC") == 0){
+                handle_exec_command(client_socket, username, args);
+            }
             else{
                 // TODO: Similar stuff for all user functions
 

@@ -88,6 +88,7 @@ int main(int argc, char *argv[]){
 
                 // Determine if Redirect is Expected (READ/STREAM/WRITE/UNDO)
                 int is_redirect_expected = 0;
+                int is_exec_command = 0;
                 char *ss_cmd_protocol = CMD_SS_READ; // Default
 
                 if(strcmp(original_command, "READ") == 0){
@@ -106,11 +107,40 @@ int main(int argc, char *argv[]){
                     is_redirect_expected = 1;
                     ss_cmd_protocol = CMD_UNDO;
                 }
+                else if(strcmp(original_command, "EXEC") == 0){
+                    is_exec_command = 1;
+                }
 
                 // Send the command to the server
                 if(write(sock, input_buffer, strlen(input_buffer)) < 0){
                     perror("write to server failed");
                     break;
+                }
+
+                if(is_exec_command){
+                    while(1){
+                        memset(buffer, 0, MAX_BUFFER);
+                        // We keep reading until we see the terminator
+                        bytes_read = read(sock, buffer, MAX_BUFFER - 1);
+                        if(bytes_read <= 0) {
+                            printf("Server disconnected.\n");
+                            close(sock);
+                            exit(0);
+                        }
+                        buffer[bytes_read] = '\0';
+
+                        // Check for terminator
+                        char *term_ptr = strstr(buffer, "<<END>>\n");
+                        if(term_ptr){
+                            *term_ptr = '\0'; // Cut off the terminator
+                            printf("%s", buffer);
+                            break; // Stop reading
+                        } 
+                        else{
+                            printf("%s", buffer);
+                        }
+                    }
+                    continue; // Skip the rest of the loop, start next command
                 }
 
                 // Read the server's reply (NM's response or the redirect)

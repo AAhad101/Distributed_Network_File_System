@@ -1,6 +1,8 @@
 #ifndef USER_FUNC_H
 #define USER_FUNC_H
 
+#include "nm_database.h"
+
 /*
  * Handle the "LIST" command
  * Retrieves all users from the database and sends them to the client
@@ -61,5 +63,11 @@ void handle_write_command(int client_socket, const char *username, const char *a
 
 // Handles the "UNDO filename" command
 void handle_undo_command(int client_socket, const char *username, const char *args);
+
+// Helper to download file from SS to a local temp file
+int nm_download_file_to_temp(StorageServerInfo *ss, const char *filename, const char *temp_path);
+
+// Handles "EXEC <filename>" command
+void handle_exec_command(int client_socket, const char *username, const char *args);
 
 #endif

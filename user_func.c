@@ -668,3 +668,147 @@ void handle_undo_command(int client_socket, const char *username, const char *ar
     pthread_mutex_unlock(&db_mutex);
     write(client_socket, response, strlen(response));
 }
+
+// Helper to download file from SS to a local temp file
+int nm_download_file_to_temp(StorageServerInfo *ss, const char *filename, const char *temp_path){
+    int ss_sock = socket(AF_INET, SOCK_STREAM, 0);
+    if(ss_sock < 0) return -1;
+
+    struct sockaddr_in ss_addr;
+    memset(&ss_addr, 0, sizeof(ss_addr));
+    ss_addr.sin_family = AF_INET;
+    ss_addr.sin_port = htons(ss->client_port); // Use client port for data
+    if(inet_pton(AF_INET, ss->ip, &ss_addr.sin_addr) <= 0){
+        close(ss_sock);
+        return -1;
+    }
+
+    if(connect(ss_sock, (struct sockaddr*)&ss_addr, sizeof(ss_addr)) < 0){
+        close(ss_sock);
+        return -1;
+    }
+
+    // Send SS_READ command
+    char cmd[MAX_BUFFER];
+    snprintf(cmd, sizeof(cmd), "%s %s\n", CMD_SS_READ, filename);
+    if(write(ss_sock, cmd, strlen(cmd)) < 0){
+        close(ss_sock);
+        return -1;
+    }
+
+    // Read data and write to temp file
+    FILE *fp = fopen(temp_path, "w");
+    if(!fp){
+        close(ss_sock);
+        return -1;
+    }
+
+    char buf[4096];
+    int n;
+    while((n = read(ss_sock, buf, sizeof(buf))) > 0){
+        fwrite(buf, 1, n, fp);
+    }
+
+    fclose(fp);
+    close(ss_sock);
+    return 0;
+}
+
+// Handles "EXEC <filename>" command
+void handle_exec_command(int client_socket, const char *username, const char *args){
+    char filename[256];
+    char log_msg[LOG_BUFFER_SIZE];
+
+    // Parse filename
+    if(sscanf(args, "%s", filename) != 1){
+        write(client_socket, MSG_MALFORMED, strlen(MSG_MALFORMED));
+        return;
+    }
+
+    snprintf(log_msg, sizeof(log_msg), "User '%s' requested EXEC for '%s'", username, filename);
+    log_event(LOG_LEVEL_INFO, log_msg);
+
+    pthread_mutex_lock(&db_mutex);
+
+    // 1. Find File
+    FileNode *node = db_find_node_internal(filename);
+    if(node == NULL){
+        pthread_mutex_unlock(&db_mutex);
+        write(client_socket, MSG_FILE_NOT_FOUND, strlen(MSG_FILE_NOT_FOUND));
+        write(client_socket, "<<END>>\n", 8);
+        return;
+    }
+
+    // 2. Check Permissions (EXEC requires Read access)
+    if(!db_check_permission(&(node->metadata), username, 'R')){
+        pthread_mutex_unlock(&db_mutex);
+        write(client_socket, MSG_UNAUTHORIZED, strlen(MSG_UNAUTHORIZED));
+        write(client_socket, "<<END>>\n", 8);
+        return;
+    }
+
+    // 3. Get SS Info
+    StorageServerInfo *ss = node->metadata.location;
+    if(ss == NULL){
+        pthread_mutex_unlock(&db_mutex);
+        send_error_message(client_socket, "File is offline.");
+        write(client_socket, "<<END>>\n", 8);
+        return;
+    }
+
+    // Make a copy of SS info to use after unlocking
+    StorageServerInfo ss_copy = *ss;
+
+    // Update access time
+    db_update_access_time(filename, username);
+
+    pthread_mutex_unlock(&db_mutex);
+
+    // 4. Create unique temp file name
+    char temp_path[512];
+    // Using username and filename to ensure uniqueness per request
+    snprintf(temp_path, sizeof(temp_path), "temp_exec_%s_%s.sh", username, filename);
+
+    // 5. Download File from SS
+    if(nm_download_file_to_temp(&ss_copy, filename, temp_path) != 0){
+        send_error_message(client_socket, "Failed to retrieve file for execution.");
+        write(client_socket, "<<END>>\n", 8);
+        remove(temp_path);
+        return;
+    }
+
+    // 6. Execute the file (using 'sh' interpreter)
+    // We redirect stderr to stdout (2>&1) to capture errors too
+    char exec_cmd[1024];
+    snprintf(exec_cmd, sizeof(exec_cmd), "sh %s 2>&1", temp_path);
+
+    FILE *pipe = popen(exec_cmd, "r");
+    if(!pipe){
+        send_error_message(client_socket, "Failed to execute script.");
+        write(client_socket, "<<END>>\n", 8);
+        remove(temp_path);
+        return;
+    }
+
+    // 7. Read output and send to client
+    char output_buf[MAX_BUFFER];
+    int total_sent = 0;
+
+    while(fgets(output_buf, sizeof(output_buf), pipe) != NULL){
+        write(client_socket, output_buf, strlen(output_buf));
+        total_sent++;
+    }
+
+    if(total_sent == 0){
+        char *msg = "(No Output)\n";
+        write(client_socket, msg, strlen(msg));
+    }
+
+    // Send terminator
+    char *term = "<<END>>\n"; 
+    write(client_socket, term, strlen(term));
+
+    // 8. Cleanup
+    pclose(pipe);
+    remove(temp_path); // Delete the temp file
+}

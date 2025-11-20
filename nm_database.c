@@ -147,6 +147,17 @@ FileMetadata *db_find_file(const char *filename){
  * PERM|<filename>|W|<username>
 */
 
+static int is_user_in_list(UserAccessNode *head, const char *username){
+    UserAccessNode *current = head;
+    while(current){
+        if(strcmp(current->username, username) == 0){
+            return 1;
+        }
+        current = current->next;
+    }
+    return 0;
+}
+
 // Loading files metadata from the disk and filling up the data structures
 void db_load_from_disk(){
     log_event(LOG_LEVEL_INFO, "Loading metadata from disk...");
@@ -214,6 +225,15 @@ void db_load_from_disk(){
             if(filename && type && username){
                 FileNode *file_node = db_find_node_internal(filename);
                 if(file_node){
+                    // Checking for duplicates
+                    UserAccessNode *head_to_check = (strcmp(type, "R") == 0) 
+                        ? file_node->metadata.read_permissions_head 
+                        : file_node->metadata.write_permissions_head;
+
+                    if(is_user_in_list(head_to_check, username)){
+                        continue; // User already exists, skip duplicate
+                    }
+
                     UserAccessNode *user_node = (UserAccessNode *)malloc(sizeof(UserAccessNode));
                     strcpy(user_node->username, username);
 
@@ -452,7 +472,6 @@ void db_register_ss(const char *reg_string){
     pthread_mutex_unlock(&db_mutex);
 }
 
-
 char *db_get_all_users(){
     pthread_mutex_lock(&db_mutex);
 
@@ -492,17 +511,6 @@ char *db_get_all_users(){
 
     pthread_mutex_unlock(&db_mutex);
     return user_string;
-}
-
-static int is_user_in_list(UserAccessNode *head, const char *username){
-    UserAccessNode *current = head;
-    while(current){
-        if(strcmp(current->username, username) == 0){
-            return 1;
-        }
-        current = current->next;
-    }
-    return 0;
 }
 
 int db_check_permission(FileMetadata *metadata, const char *username, char permission){

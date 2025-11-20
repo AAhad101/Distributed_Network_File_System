@@ -10,4 +10,4 @@ Gray area thingies:
 
 - Then within the sentence, for READ, STREAM and EXEC we acquire the sentence read lock while for WRITE we acquire the sentence write lock.
 
-- We used pthread_rwlock_t (general read-write lock) for our project even though we are aware of the possible writers' starvation since we assumed that there will be many more readers than writers and due to its ease in implementation.
+- We used pthread_rwlock_t (general read-write lock) for our project even though we are aware of the possible writers' starvation since we assumed that there will be many more readers than writers and due to its ease in implementation

@@ -6,7 +6,7 @@
 
 // Network definitions
 #define NM_PORT 8000
-#define NM_IP "10.1.40.87"
+#define NM_IP "10.50.226.84"
 
 // Buffer size
 #define MAX_BUFFER 4096
